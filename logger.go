@@ -13,8 +13,8 @@ type Report struct {
 	Err        error
 }
 
-// NewReport
-func NewReport(resp *Response, err error) *Report {
+// newReport
+func newReport(resp *Response, err error) *Report {
 	var (
 		rurl         = ""
 		status       = 0
