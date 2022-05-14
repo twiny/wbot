@@ -45,6 +45,12 @@ func NewWBot(opts ...Option) (*WBot, error)
 // Crawl
 func (wb *WBot) Crawl(link string) error
 
+// SetOptions
+func (wb *WBot) SetOptions(opts ...Option)
+
+// Stream
+func (wb *WBot) Stream() <-chan *Response
+
 // Close
 func (wb *WBot) Close() 
 ```
@@ -59,29 +65,30 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/twiny/wbot"
 )
 
+//
 func main() {
 	// options
 	opts := []wbot.Option{
 		wbot.SetMaxDepth(5),
-		wbot.SetRateLimit(1, 2*time.Second),
+		wbot.SetParallel(10),
+		wbot.SetRateLimit(1, 1*time.Second),
 		wbot.SetMaxBodySize(1024 * 1024),
 		wbot.SetUserAgents([]string{"Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"}),
 	}
 
-	// new bot
-	bot, err := wbot.NewWBot(opts...)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+	// wbot
+	bot := wbot.NewWBot(opts...)
 	defer bot.Close()
 
+	// crawl
+	site := `https://www.github.com`
+
+	// stream
 	// stream
 	go func() {
 		count := 0
@@ -91,13 +98,11 @@ func main() {
 		}
 	}()
 
-	site := "https://www.github.com"
-
 	if err := bot.Crawl(site); err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 
-	fmt.Println("i'm out :)")
+	fmt.Println("done")
 }
 ```
 
@@ -106,6 +111,7 @@ func main() {
 - [ ] Add test cases.
 - [ ] Implement `Fetch` using Chromedp.
 - [ ] Add more examples.
+- [ ] Add documentation.
 
 ### Bugs
 Bugs or suggestions? Please visit the [issue tracker](https://github.com/twiny/wbot/issues).
