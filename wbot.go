@@ -32,12 +32,13 @@ type WBot struct {
 }
 
 // NewWBot
-func NewWBot(opts ...Option) (*WBot, error) {
-	// default config
+func NewWBot(opts ...Option) *WBot {
 	conf := &config{
 		maxDepth:    10,
 		parallel:    cores,
 		maxBodySize: 1024 * 1024 * 10,
+		userAgents:  newRotator([]string{}),
+		proxies:     newRotator([]string{}),
 	}
 
 	wbot := &WBot{
@@ -52,11 +53,10 @@ func NewWBot(opts ...Option) (*WBot, error) {
 		stream:  make(chan *Response, cores),
 	}
 
-	for _, opt := range opts {
-		opt(wbot)
-	}
+	// options
+	wbot.SetOptions(opts...)
 
-	return wbot, nil
+	return wbot
 }
 
 // Crawl
@@ -71,7 +71,7 @@ func (wb *WBot) Crawl(link string) error {
 
 	time.Sleep(5 * time.Second)
 
-	req, err := NewRequest(link, 0, p)
+	req, err := newRequest(link, 0, p)
 	if err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func (wb *WBot) Crawl(link string) error {
 	}
 
 	if wb.log != nil {
-		rep := NewReport(resp, nil)
+		rep := newReport(resp, nil)
 		wb.log.Send(rep)
 	}
 
@@ -121,7 +121,7 @@ func (wb *WBot) Crawl(link string) error {
 			referer:     req.URL.String(),
 			maxBodySize: wb.conf.maxBodySize,
 		}
-		nreq, err := NewRequest(u.String(), 1, p)
+		nreq, err := newRequest(u.String(), 1, p)
 		if err != nil {
 			continue
 		}
@@ -179,14 +179,14 @@ func (wb *WBot) crawl() {
 		resp, err := wb.fetcher.Fetch(req)
 		if err != nil {
 			if wb.log != nil {
-				rep := NewReport(resp, err)
+				rep := newReport(resp, err)
 				wb.log.Send(rep)
 			}
 			continue
 		}
 
 		if wb.log != nil {
-			rep := NewReport(resp, nil)
+			rep := newReport(resp, nil)
 			wb.log.Send(rep)
 		}
 
@@ -213,13 +213,20 @@ func (wb *WBot) crawl() {
 				referer:     req.URL.String(),
 				maxBodySize: wb.conf.maxBodySize,
 			}
-			nreq, err := NewRequest(u.String(), depth, p)
+			nreq, err := newRequest(u.String(), depth, p)
 			if err != nil {
 				continue
 			}
 
 			wb.queue.Add(nreq)
 		}
+	}
+}
+
+// SetOptions
+func (wb *WBot) SetOptions(opts ...Option) {
+	for _, opt := range opts {
+		opt(wb)
 	}
 }
 
