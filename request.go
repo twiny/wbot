@@ -24,8 +24,8 @@ type param struct {
 	proxy       string
 }
 
-// NewRequest
-func NewRequest(raw string, depth int32, p param) (*Request, error) {
+// newRequest
+func newRequest(raw string, depth int32, p param) (*Request, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return nil, err
