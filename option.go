@@ -5,92 +5,81 @@ import (
 )
 
 // Option
-type Option func(*WBot) error
+type Option func(*WBot)
 
 // SetFetcher
 func SetFetcher(f Fetcher) Option {
-	return func(w *WBot) error {
+	return func(w *WBot) {
 		w.fetcher = f
-		return nil
 	}
 }
 
 // SetStore
 func SetStore(s Store) Option {
-	return func(w *WBot) error {
+	return func(w *WBot) {
 		w.store = s
-		return nil
 	}
 }
 
 // SetQueue
 func SetQueue(q Queue) Option {
-	return func(w *WBot) error {
+	return func(w *WBot) {
 		w.queue = q
-		return nil
 	}
 }
 
 // SetLogger
 func SetLogger(l Logger) Option {
-	return func(w *WBot) error {
+	return func(w *WBot) {
 		w.log = l
-		return nil
 	}
 }
 
 // SetLimiter
 func SetRateLimit(rate int, interval time.Duration) Option {
-	return func(w *WBot) error {
+	return func(w *WBot) {
 		w.limit = newLimiter(rate, interval)
-		return nil
 	}
 }
 
 // SetFilter
 func SetFilter(allowed, disallowed []string) Option {
-	return func(w *WBot) error {
+	return func(w *WBot) {
 		w.filter = newFilter(allowed, disallowed)
-		return nil
 	}
 }
 
 // SetMaxDepth
 func SetMaxDepth(depth int32) Option {
-	return func(w *WBot) error {
+	return func(w *WBot) {
 		w.conf.maxDepth = depth
-		return nil
 	}
 }
 
 // SetParallel
 func SetParallel(parallel int) Option {
-	return func(w *WBot) error {
+	return func(w *WBot) {
 		w.conf.parallel = parallel
-		return nil
 	}
 }
 
 // SetMaxBodySize
 func SetMaxBodySize(size int64) Option {
-	return func(w *WBot) error {
+	return func(w *WBot) {
 		w.conf.maxBodySize = size
-		return nil
 	}
 }
 
 // SetUserAgents
 func SetUserAgents(agents []string) Option {
-	return func(w *WBot) error {
+	return func(w *WBot) {
 		w.conf.userAgents = newRotator(agents)
-		return nil
 	}
 }
 
 // SetProxies
 func SetProxies(proxies []string) Option {
-	return func(w *WBot) error {
+	return func(w *WBot) {
 		w.conf.proxies = newRotator(proxies)
-		return nil
 	}
 }
