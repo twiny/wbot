@@ -23,7 +23,7 @@ func newRotator(s []string) *rotator {
 
 // Next
 func (r *rotator) next() string {
-	if r == nil {
+	if r.r == nil {
 		return ""
 	}
 
