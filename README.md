@@ -3,7 +3,7 @@
 A configurable, thread-safe web crawler, provides a minimal interface for crawling and downloading web pages.
 
 ### Features:
-- clean minimal API.
+- Clean minimal API.
 - Configurable: MaxDepth, MaxBodySize, Rate Limit, Parrallelism,  User Agent & Proxy rotation.
 - Memory-efficient, thread-safe.
 - Provides built-in interface: Fetcher, Store, Queue & a Logger.
@@ -15,12 +15,13 @@ A configurable, thread-safe web crawler, provides a minimal interface for crawli
 // Fetcher
 type Fetcher interface {
 	Fetch(req *Request) (*Response, error)
+	Close() error
 }
 
 // Store
 type Store interface {
 	Visited(link string) bool
-	Close()
+	Close() error
 }
 
 // Queue
@@ -28,12 +29,13 @@ type Queue interface {
 	Add(req *Request)
 	Pop() *Request
 	Next() bool
-	Close()
+	Close() error
 }
 
 // Logger
 type Logger interface {
 	Send(rep *Report)
+	Close() error
 }
 ```
 
@@ -57,6 +59,7 @@ func (wb *WBot) Close()
 
 ### Installation
 requires Go1.18
+
 `go get github.com/twiny/wbot`
 
 ### Example

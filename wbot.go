@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // default cpu core
@@ -69,8 +68,6 @@ func (wb *WBot) Crawl(link string) error {
 		proxy:       wb.conf.proxies.next(),
 	}
 
-	time.Sleep(5 * time.Second)
-
 	req, err := newRequest(link, 0, p)
 	if err != nil {
 		return err
@@ -132,9 +129,7 @@ func (wb *WBot) Crawl(link string) error {
 	// start crawl
 	wb.wg.Add(wb.conf.parallel)
 	for i := 0; i < wb.conf.parallel; i++ {
-		go func() {
-			wb.crawl()
-		}()
+		go wb.crawl()
 	}
 
 	// wait for all workers to finish
@@ -146,11 +141,8 @@ func (wb *WBot) Crawl(link string) error {
 
 // crawl
 func (wb *WBot) crawl() {
-	defer func() {
-		wb.wg.Done()
-	}()
+	defer wb.wg.Done()
 
-	//
 	for wb.queue.Next() {
 		req := wb.queue.Pop()
 

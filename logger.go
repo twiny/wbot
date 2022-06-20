@@ -3,6 +3,7 @@ package wbot
 // Logger
 type Logger interface {
 	Send(rep *Report)
+	Close() error
 }
 
 // Report

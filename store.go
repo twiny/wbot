@@ -5,7 +5,7 @@ import "sync"
 // Store
 type Store interface {
 	Visited(link string) bool
-	Close()
+	Close() error
 }
 
 // Default Store
@@ -41,6 +41,7 @@ func (s *store[T]) Visited(k T) bool {
 }
 
 // Close
-func (s *store[T]) Close() {
-	// nothing to do
+func (s *store[T]) Close() error {
+	s.visited = nil
+	return nil
 }

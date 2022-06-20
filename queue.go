@@ -7,7 +7,7 @@ type Queue interface {
 	Add(req *Request)
 	Pop() *Request
 	Next() bool
-	Close()
+	Close() error
 }
 
 // Default Queue
@@ -53,6 +53,7 @@ func (q *queue[T]) Next() bool {
 }
 
 // Close
-func (q *queue[T]) Close() {
-	// nothing to do
+func (q *queue[T]) Close() error {
+	q.q = nil
+	return nil
 }

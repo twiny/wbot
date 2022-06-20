@@ -14,6 +14,7 @@ import (
 // Fetcher
 type Fetcher interface {
 	Fetch(req *Request) (*Response, error)
+	Close() error
 }
 
 // Default Fetcher
@@ -80,7 +81,6 @@ func (f *fetcher) Fetch(req *Request) (*Response, error) {
 	nextURLs := findLinks(body)
 
 	resp.Body.Close()
-	f.cli.CloseIdleConnections()
 
 	return &Response{
 		URL:      req.URL,
@@ -89,6 +89,12 @@ func (f *fetcher) Fetch(req *Request) (*Response, error) {
 		NextURLs: nextURLs,
 		Depth:    req.Depth,
 	}, nil
+}
+
+// Close
+func (f *fetcher) Close() error {
+	f.cli.CloseIdleConnections()
+	return nil
 }
 
 // newHTTPClient
