@@ -24,10 +24,10 @@ type WBot struct {
 	limit   *limiter
 	filter  *filter
 	fetcher Fetcher
-	store   Store
 	queue   Queue
+	store   Store
 	log     Logger
-	stream  chan *Response
+	stream  chan Response
 }
 
 // NewWBot
@@ -47,9 +47,9 @@ func NewWBot(opts ...Option) *WBot {
 		limit:   newLimiter(1, 1),
 		filter:  newFilter([]string{}, []string{}),
 		store:   defaultStore[string](),
-		queue:   defaultQueue[*Request](),
+		queue:   defaultQueue[Request](),
 		log:     nil,
-		stream:  make(chan *Response, cores),
+		stream:  make(chan Response, cores),
 	}
 
 	// options
@@ -73,9 +73,11 @@ func (wb *WBot) Crawl(link string) error {
 		return err
 	}
 
-	if wb.store.Visited(link) {
-		return fmt.Errorf("already visited")
-	}
+	// no need to check first link
+	//
+	// if wb.store.Visited(link) {
+	// 	return fmt.Errorf("already visited")
+	// }
 
 	// check filter
 	if !wb.filter.Allow(req.URL) {
@@ -144,12 +146,17 @@ func (wb *WBot) crawl() {
 	defer wb.wg.Done()
 
 	for wb.queue.Next() {
-		req := wb.queue.Pop()
+		req, err := wb.queue.Pop()
+		if err != nil {
+			continue
+		}
 
 		// check if max depth reached
 		if req.Depth > wb.conf.maxDepth {
 			return
 		}
+
+		fmt.Printf("%+v\n", req)
 
 		// if already visited
 		if wb.store.Visited(req.URL.String()) {
@@ -223,7 +230,7 @@ func (wb *WBot) SetOptions(opts ...Option) {
 }
 
 // Stream
-func (wb *WBot) Stream() <-chan *Response {
+func (wb *WBot) Stream() <-chan Response {
 	return wb.stream
 }
 

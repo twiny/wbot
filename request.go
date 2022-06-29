@@ -25,18 +25,18 @@ type param struct {
 }
 
 // newRequest
-func newRequest(raw string, depth int32, p param) (*Request, error) {
+func newRequest(raw string, depth int32, p param) (Request, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, err
+		return Request{}, err
 	}
 
 	baseDomain, err := publicsuffix.EffectiveTLDPlusOne(u.Hostname())
 	if err != nil {
-		return nil, err
+		return Request{}, err
 	}
 
-	return &Request{
+	return Request{
 		BaseDomain: baseDomain,
 		URL:        u,
 		Depth:      depth,

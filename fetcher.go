@@ -13,7 +13,7 @@ import (
 
 // Fetcher
 type Fetcher interface {
-	Fetch(req *Request) (*Response, error)
+	Fetch(req Request) (Response, error)
 	Close() error
 }
 
@@ -37,7 +37,7 @@ func defaultFetcher() *fetcher {
 }
 
 // Fetch
-func (f *fetcher) Fetch(req *Request) (*Response, error) {
+func (f *fetcher) Fetch(req Request) (Response, error) {
 	var (
 		userAgent   = defaultUserAgent
 		maxBodySize = int64(1024 * 1024 * 10)
@@ -67,7 +67,7 @@ func (f *fetcher) Fetch(req *Request) (*Response, error) {
 		ProtoMinor: 1,
 	})
 	if err != nil {
-		return nil, err
+		return Response{}, err
 	}
 
 	// Limit response body reading
@@ -75,14 +75,14 @@ func (f *fetcher) Fetch(req *Request) (*Response, error) {
 
 	body, err := io.ReadAll(bodyReader)
 	if err != nil {
-		return nil, err
+		return Response{}, err
 	}
 
 	nextURLs := findLinks(body)
 
 	resp.Body.Close()
 
-	return &Response{
+	return Response{
 		URL:      req.URL,
 		Status:   resp.StatusCode,
 		Body:     body,

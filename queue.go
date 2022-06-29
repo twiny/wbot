@@ -1,11 +1,14 @@
 package wbot
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 // Queue
 type Queue interface {
-	Add(req *Request)
-	Pop() *Request
+	Add(req Request) error
+	Pop() (Request, error)
 	Next() bool
 	Close() error
 }
@@ -27,22 +30,25 @@ func defaultQueue[T any]() *queue[T] {
 }
 
 // Add
-func (q *queue[T]) Add(item T) {
+func (q *queue[T]) Add(item T) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.q = append(q.q, item)
+
+	return nil
 }
 
 // Pop
-func (q *queue[T]) Pop() T {
+func (q *queue[T]) Pop() (T, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	// if len(q.q) == 0 {
-	// 	return nil
-	// }
+	if len(q.q) == 0 {
+		var t T
+		return t, fmt.Errorf("queue is empty")
+	}
 	r := q.q[0]
 	q.q = q.q[1:]
-	return r
+	return r, nil
 }
 
 // Next
