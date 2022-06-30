@@ -7,6 +7,7 @@ require (
 	github.com/go-echarts/statsview v0.3.4
 	github.com/twiny/carbon v1.0.1
 	github.com/twiny/ratelimit v0.0.0-20220509163414-256d3376b0ac
+	go.etcd.io/bbolt v1.3.5
 	golang.org/x/net v0.0.0-20220513224357-95641704303c
 )
 

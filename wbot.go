@@ -156,7 +156,7 @@ func (wb *WBot) crawl() {
 			return
 		}
 
-		fmt.Printf("%+v\n", req)
+		// fmt.Printf("%+v\n", req)
 
 		// if already visited
 		if wb.store.Visited(req.URL.String()) {
