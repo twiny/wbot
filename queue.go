@@ -7,8 +7,8 @@ import (
 
 // Queue
 type Queue interface {
-	Add(req Request) error
-	Pop() (Request, error)
+	Enqueue(req Request) error
+	Dequeue() (Request, error)
 	Next() bool
 	Close() error
 }
@@ -29,8 +29,8 @@ func defaultQueue[T any]() *queue[T] {
 	}
 }
 
-// Add
-func (q *queue[T]) Add(item T) error {
+// Enqueue
+func (q *queue[T]) Enqueue(item T) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.q = append(q.q, item)
@@ -38,8 +38,8 @@ func (q *queue[T]) Add(item T) error {
 	return nil
 }
 
-// Pop
-func (q *queue[T]) Pop() (T, error) {
+// Dequeue
+func (q *queue[T]) Dequeue() (T, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if len(q.q) == 0 {
@@ -53,9 +53,7 @@ func (q *queue[T]) Pop() (T, error) {
 
 // Next
 func (q *queue[T]) Next() bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return len(q.q) > 0
+	return len(q.q) != 0
 }
 
 // Close

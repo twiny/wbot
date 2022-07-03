@@ -41,7 +41,7 @@ func (q *Queue) Add(req wbot.Request) error {
 	key := strings.Join([]string{
 		q.prefix,
 		hex.EncodeToString(buf.Bytes()),
-	}, "")
+	}, "_")
 
 	// add to list
 	q.mu.Lock()

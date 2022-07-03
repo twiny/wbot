@@ -13,19 +13,20 @@ type Request struct {
 	BaseDomain string
 	URL        *url.URL
 	Depth      int32
-	param      param
+	Param      Param
 }
 
 // param
-type param struct {
-	referer     string
-	maxBodySize int64
-	userAgent   string
-	proxy       string
+type Param struct {
+	Referer     string
+	MaxBodySize int64
+	UserAgent   string
+	Proxy       string
 }
 
 // newRequest
-func newRequest(raw string, depth int32, p param) (Request, error) {
+func newRequest(raw string, depth int32, p Param) (Request, error) {
+	// TODO: check if url is empty
 	u, err := url.Parse(raw)
 	if err != nil {
 		return Request{}, err
@@ -40,7 +41,7 @@ func newRequest(raw string, depth int32, p param) (Request, error) {
 		BaseDomain: baseDomain,
 		URL:        u,
 		Depth:      depth,
-		param:      p,
+		Param:      p,
 	}, nil
 }
 

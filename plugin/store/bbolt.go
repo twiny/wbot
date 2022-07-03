@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	prefix = "store_"
+	prefix = "store"
 )
 
 // BBoltStore
@@ -38,24 +38,28 @@ func NewBBoltStore(db *bbolt.DB) (wbot.Store, error) {
 
 // Visited
 func (bs *BBoltStore) Visited(link string) bool {
-	hash := sha256.Sum224([]byte(link))
+	sum := sha256.Sum224([]byte(link))
 
 	//
 	key := strings.Join([]string{
 		bs.prefix,
-		hex.EncodeToString(hash[:]),
-	}, "")
+		hex.EncodeToString(sum[:]),
+	}, "_")
 
 	return bs.db.Update(func(tx *bbolt.Tx) error {
 		bu := tx.Bucket([]byte(prefix))
 
-		if d := bu.Get([]byte(key)); d == nil {
-			// if not found save it and return false
-			return bu.Put([]byte(key), []byte(link))
+		d := bu.Get([]byte(key))
+		// if d == nil means not found
+		if d == nil {
+			if err := bu.Put([]byte(key), []byte(link)); err != nil {
+				return err
+			}
+			return nil
 		}
 
 		return fmt.Errorf("visited")
-	}) == nil
+	}) != nil
 }
 
 // Close

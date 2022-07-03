@@ -17,7 +17,7 @@ type Store struct {
 // NewBadgerDBStore
 func NewBadgerDBStore(c *carbon.Cache) (*Store, error) {
 	return &Store{
-		prefix: "store_",
+		prefix: prefix,
 		c:      c,
 	}, nil
 }
@@ -30,7 +30,7 @@ func (s *Store) Visited(link string) bool {
 	key := strings.Join([]string{
 		s.prefix,
 		hex.EncodeToString(hash[:]),
-	}, "")
+	}, "_")
 
 	// check if already visited
 	if d, err := s.c.Get(key); d == nil || err != nil {

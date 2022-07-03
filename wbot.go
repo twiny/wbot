@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // default cpu core
@@ -61,11 +62,11 @@ func NewWBot(opts ...Option) *WBot {
 // Crawl
 func (wb *WBot) Crawl(link string) error {
 	// first request
-	p := param{
-		referer:     link,
-		maxBodySize: wb.conf.maxBodySize,
-		userAgent:   wb.conf.userAgents.next(),
-		proxy:       wb.conf.proxies.next(),
+	p := Param{
+		Referer:     link,
+		MaxBodySize: wb.conf.maxBodySize,
+		UserAgent:   wb.conf.userAgents.next(),
+		Proxy:       wb.conf.proxies.next(),
 	}
 
 	req, err := newRequest(link, 0, p)
@@ -73,8 +74,7 @@ func (wb *WBot) Crawl(link string) error {
 		return err
 	}
 
-	// no need to check first link
-	//
+	// // no need to check first link
 	// if wb.store.Visited(link) {
 	// 	return fmt.Errorf("already visited")
 	// }
@@ -115,17 +115,19 @@ func (wb *WBot) Crawl(link string) error {
 		// add only referer & maxBodySize
 		// rest of params will be added
 		// right before fetch request
-		// to avoid running user agent and proxy rotation
-		p := param{
-			referer:     req.URL.String(),
-			maxBodySize: wb.conf.maxBodySize,
+		// to avoid rotating user agent and proxy.
+		p := Param{
+			Referer:     req.URL.String(),
+			MaxBodySize: wb.conf.maxBodySize,
 		}
 		nreq, err := newRequest(u.String(), 1, p)
 		if err != nil {
 			continue
 		}
 
-		wb.queue.Add(nreq)
+		if err := wb.queue.Enqueue(nreq); err != nil {
+			continue
+		}
 	}
 
 	// start crawl
@@ -136,6 +138,7 @@ func (wb *WBot) Crawl(link string) error {
 
 	// wait for all workers to finish
 	wb.wg.Wait()
+	// wb.done()
 	close(wb.stream)
 
 	return nil
@@ -144,10 +147,12 @@ func (wb *WBot) Crawl(link string) error {
 // crawl
 func (wb *WBot) crawl() {
 	defer wb.wg.Done()
-
+	//
 	for wb.queue.Next() {
-		req, err := wb.queue.Pop()
+		req, err := wb.queue.Dequeue()
 		if err != nil {
+			fmt.Println(err)
+			time.Sleep(3 * time.Second)
 			continue
 		}
 
@@ -155,8 +160,6 @@ func (wb *WBot) crawl() {
 		if req.Depth > wb.conf.maxDepth {
 			return
 		}
-
-		// fmt.Printf("%+v\n", req)
 
 		// if already visited
 		if wb.store.Visited(req.URL.String()) {
@@ -171,8 +174,8 @@ func (wb *WBot) crawl() {
 		// rate limit
 		wb.limit.take(req.URL)
 
-		req.param.userAgent = wb.conf.userAgents.next()
-		req.param.proxy = wb.conf.proxies.next()
+		req.Param.UserAgent = wb.conf.userAgents.next()
+		req.Param.Proxy = wb.conf.proxies.next()
 
 		// visit next url
 		resp, err := wb.fetcher.Fetch(req)
@@ -208,16 +211,19 @@ func (wb *WBot) crawl() {
 			if !strings.Contains(u.Hostname(), req.BaseDomain) {
 				continue
 			}
-			p := param{
-				referer:     req.URL.String(),
-				maxBodySize: wb.conf.maxBodySize,
+
+			p := Param{
+				Referer:     req.URL.String(),
+				MaxBodySize: wb.conf.maxBodySize,
 			}
 			nreq, err := newRequest(u.String(), depth, p)
 			if err != nil {
 				continue
 			}
 
-			wb.queue.Add(nreq)
+			if err := wb.queue.Enqueue(nreq); err != nil {
+				continue
+			}
 		}
 	}
 }
@@ -238,4 +244,7 @@ func (wb *WBot) Stream() <-chan Response {
 func (wb *WBot) Close() {
 	wb.queue.Close()
 	wb.store.Close()
+	if wb.log != nil {
+		wb.log.Close()
+	}
 }
