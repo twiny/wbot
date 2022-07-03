@@ -14,14 +14,14 @@ var (
 	prefix = "store"
 )
 
-// BBoltStore
-type BBoltStore struct {
+// BStore
+type BStore struct {
 	prefix string
 	db     *bbolt.DB
 }
 
-// NewBBoltStore
-func NewBBoltStore(db *bbolt.DB) (wbot.Store, error) {
+// NewBStore
+func NewBStore(db *bbolt.DB) (wbot.Store, error) {
 	// create bucket for store
 	if err := db.Update(func(tx *bbolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte(prefix))
@@ -30,14 +30,14 @@ func NewBBoltStore(db *bbolt.DB) (wbot.Store, error) {
 		return nil, err
 	}
 
-	return &BBoltStore{
+	return &BStore{
 		prefix: prefix,
 		db:     db,
 	}, nil
 }
 
 // Visited
-func (bs *BBoltStore) Visited(link string) bool {
+func (bs *BStore) Visited(link string) bool {
 	sum := sha256.Sum224([]byte(link))
 
 	//
@@ -63,6 +63,6 @@ func (bs *BBoltStore) Visited(link string) bool {
 }
 
 // Close
-func (bs *BBoltStore) Close() error {
+func (bs *BStore) Close() error {
 	return bs.db.Close()
 }

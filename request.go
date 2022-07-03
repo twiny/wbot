@@ -26,7 +26,6 @@ type Param struct {
 
 // newRequest
 func newRequest(raw string, depth int32, p Param) (Request, error) {
-	// TODO: check if url is empty
 	u, err := url.Parse(raw)
 	if err != nil {
 		return Request{}, err

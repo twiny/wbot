@@ -16,8 +16,13 @@ type Report struct {
 
 // newReport
 func newReport(resp Response, err error) Report {
+	requestURL := ""
+	if resp.URL != nil {
+		requestURL = resp.URL.String()
+	}
+	//
 	return Report{
-		RequestURL: resp.URL.String(),
+		RequestURL: requestURL,
 		Status:     resp.Status,
 		Depth:      resp.Depth,
 		Err:        err,

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // default cpu core
@@ -74,11 +73,6 @@ func (wb *WBot) Crawl(link string) error {
 		return err
 	}
 
-	// // no need to check first link
-	// if wb.store.Visited(link) {
-	// 	return fmt.Errorf("already visited")
-	// }
-
 	// check filter
 	if !wb.filter.Allow(req.URL) {
 		return fmt.Errorf("not allowed")
@@ -138,7 +132,6 @@ func (wb *WBot) Crawl(link string) error {
 
 	// wait for all workers to finish
 	wb.wg.Wait()
-	// wb.done()
 	close(wb.stream)
 
 	return nil
@@ -151,23 +144,37 @@ func (wb *WBot) crawl() {
 	for wb.queue.Next() {
 		req, err := wb.queue.Dequeue()
 		if err != nil {
-			fmt.Println(err)
-			time.Sleep(3 * time.Second)
+			if wb.log != nil {
+				rep := newReport(Response{}, err)
+				wb.log.Send(rep)
+			}
 			continue
 		}
 
 		// check if max depth reached
 		if req.Depth > wb.conf.maxDepth {
+			if wb.log != nil {
+				rep := newReport(Response{}, fmt.Errorf("max depth reached"))
+				wb.log.Send(rep)
+			}
 			return
 		}
 
 		// if already visited
 		if wb.store.Visited(req.URL.String()) {
+			if wb.log != nil {
+				rep := newReport(Response{}, fmt.Errorf("url recently checked"))
+				wb.log.Send(rep)
+			}
 			continue
 		}
 
 		// check filter
 		if !wb.filter.Allow(req.URL) {
+			if wb.log != nil {
+				rep := newReport(Response{}, fmt.Errorf("filtered url"))
+				wb.log.Send(rep)
+			}
 			continue
 		}
 
