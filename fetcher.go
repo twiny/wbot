@@ -13,7 +13,7 @@ import (
 
 // Fetcher
 type Fetcher interface {
-	Fetch(req *Request) (*Response, error)
+	Fetch(req Request) (Response, error)
 	Close() error
 }
 
@@ -37,26 +37,26 @@ func defaultFetcher() *fetcher {
 }
 
 // Fetch
-func (f *fetcher) Fetch(req *Request) (*Response, error) {
+func (f *fetcher) Fetch(req Request) (Response, error) {
 	var (
 		userAgent   = defaultUserAgent
 		maxBodySize = int64(1024 * 1024 * 10)
 	)
 
-	if req.param.userAgent != "" {
-		userAgent = req.param.userAgent
+	if req.Param.UserAgent != "" {
+		userAgent = req.Param.UserAgent
 	}
 
-	if req.param.maxBodySize > 0 {
-		maxBodySize = req.param.maxBodySize
+	if req.Param.MaxBodySize > 0 {
+		maxBodySize = req.Param.MaxBodySize
 	}
 
 	// add headers
 	var header = make(http.Header)
 	header.Set("User-Agent", userAgent)
-	header.Set("Referer", req.param.referer)
+	header.Set("Referer", req.Param.Referer)
 
-	f.cli.Transport = newHTTPTransport(req.param.proxy)
+	f.cli.Transport = newHTTPTransport(req.Param.Proxy)
 
 	resp, err := f.cli.Do(&http.Request{
 		Method:     http.MethodGet,
@@ -67,7 +67,7 @@ func (f *fetcher) Fetch(req *Request) (*Response, error) {
 		ProtoMinor: 1,
 	})
 	if err != nil {
-		return nil, err
+		return Response{}, err
 	}
 
 	// Limit response body reading
@@ -75,14 +75,14 @@ func (f *fetcher) Fetch(req *Request) (*Response, error) {
 
 	body, err := io.ReadAll(bodyReader)
 	if err != nil {
-		return nil, err
+		return Response{}, err
 	}
 
 	nextURLs := findLinks(body)
 
 	resp.Body.Close()
 
-	return &Response{
+	return Response{
 		URL:      req.URL,
 		Status:   resp.StatusCode,
 		Body:     body,

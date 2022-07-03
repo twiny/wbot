@@ -1,2 +1,4 @@
 cmd/tests
+makefile
 logs
+tmp

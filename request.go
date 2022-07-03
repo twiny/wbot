@@ -13,34 +13,34 @@ type Request struct {
 	BaseDomain string
 	URL        *url.URL
 	Depth      int32
-	param      param
+	Param      Param
 }
 
 // param
-type param struct {
-	referer     string
-	maxBodySize int64
-	userAgent   string
-	proxy       string
+type Param struct {
+	Referer     string
+	MaxBodySize int64
+	UserAgent   string
+	Proxy       string
 }
 
 // newRequest
-func newRequest(raw string, depth int32, p param) (*Request, error) {
+func newRequest(raw string, depth int32, p Param) (Request, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, err
+		return Request{}, err
 	}
 
 	baseDomain, err := publicsuffix.EffectiveTLDPlusOne(u.Hostname())
 	if err != nil {
-		return nil, err
+		return Request{}, err
 	}
 
-	return &Request{
+	return Request{
 		BaseDomain: baseDomain,
 		URL:        u,
 		Depth:      depth,
-		param:      p,
+		Param:      p,
 	}, nil
 }
 

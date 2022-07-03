@@ -24,10 +24,10 @@ type WBot struct {
 	limit   *limiter
 	filter  *filter
 	fetcher Fetcher
-	store   Store
 	queue   Queue
+	store   Store
 	log     Logger
-	stream  chan *Response
+	stream  chan Response
 }
 
 // NewWBot
@@ -47,9 +47,9 @@ func NewWBot(opts ...Option) *WBot {
 		limit:   newLimiter(1, 1),
 		filter:  newFilter([]string{}, []string{}),
 		store:   defaultStore[string](),
-		queue:   defaultQueue[*Request](),
+		queue:   defaultQueue[Request](),
 		log:     nil,
-		stream:  make(chan *Response, cores),
+		stream:  make(chan Response, cores),
 	}
 
 	// options
@@ -61,20 +61,16 @@ func NewWBot(opts ...Option) *WBot {
 // Crawl
 func (wb *WBot) Crawl(link string) error {
 	// first request
-	p := param{
-		referer:     link,
-		maxBodySize: wb.conf.maxBodySize,
-		userAgent:   wb.conf.userAgents.next(),
-		proxy:       wb.conf.proxies.next(),
+	p := Param{
+		Referer:     link,
+		MaxBodySize: wb.conf.maxBodySize,
+		UserAgent:   wb.conf.userAgents.next(),
+		Proxy:       wb.conf.proxies.next(),
 	}
 
 	req, err := newRequest(link, 0, p)
 	if err != nil {
 		return err
-	}
-
-	if wb.store.Visited(link) {
-		return fmt.Errorf("already visited")
 	}
 
 	// check filter
@@ -113,17 +109,19 @@ func (wb *WBot) Crawl(link string) error {
 		// add only referer & maxBodySize
 		// rest of params will be added
 		// right before fetch request
-		// to avoid running user agent and proxy rotation
-		p := param{
-			referer:     req.URL.String(),
-			maxBodySize: wb.conf.maxBodySize,
+		// to avoid rotating user agent and proxy.
+		p := Param{
+			Referer:     req.URL.String(),
+			MaxBodySize: wb.conf.maxBodySize,
 		}
 		nreq, err := newRequest(u.String(), 1, p)
 		if err != nil {
 			continue
 		}
 
-		wb.queue.Add(nreq)
+		if err := wb.queue.Enqueue(nreq); err != nil {
+			continue
+		}
 	}
 
 	// start crawl
@@ -142,30 +140,49 @@ func (wb *WBot) Crawl(link string) error {
 // crawl
 func (wb *WBot) crawl() {
 	defer wb.wg.Done()
-
+	//
 	for wb.queue.Next() {
-		req := wb.queue.Pop()
+		req, err := wb.queue.Dequeue()
+		if err != nil {
+			if wb.log != nil {
+				rep := newReport(Response{}, err)
+				wb.log.Send(rep)
+			}
+			continue
+		}
 
 		// check if max depth reached
 		if req.Depth > wb.conf.maxDepth {
+			if wb.log != nil {
+				rep := newReport(Response{}, fmt.Errorf("max depth reached"))
+				wb.log.Send(rep)
+			}
 			return
 		}
 
 		// if already visited
 		if wb.store.Visited(req.URL.String()) {
+			if wb.log != nil {
+				rep := newReport(Response{}, fmt.Errorf("url recently checked"))
+				wb.log.Send(rep)
+			}
 			continue
 		}
 
 		// check filter
 		if !wb.filter.Allow(req.URL) {
+			if wb.log != nil {
+				rep := newReport(Response{}, fmt.Errorf("filtered url"))
+				wb.log.Send(rep)
+			}
 			continue
 		}
 
 		// rate limit
 		wb.limit.take(req.URL)
 
-		req.param.userAgent = wb.conf.userAgents.next()
-		req.param.proxy = wb.conf.proxies.next()
+		req.Param.UserAgent = wb.conf.userAgents.next()
+		req.Param.Proxy = wb.conf.proxies.next()
 
 		// visit next url
 		resp, err := wb.fetcher.Fetch(req)
@@ -201,16 +218,19 @@ func (wb *WBot) crawl() {
 			if !strings.Contains(u.Hostname(), req.BaseDomain) {
 				continue
 			}
-			p := param{
-				referer:     req.URL.String(),
-				maxBodySize: wb.conf.maxBodySize,
+
+			p := Param{
+				Referer:     req.URL.String(),
+				MaxBodySize: wb.conf.maxBodySize,
 			}
 			nreq, err := newRequest(u.String(), depth, p)
 			if err != nil {
 				continue
 			}
 
-			wb.queue.Add(nreq)
+			if err := wb.queue.Enqueue(nreq); err != nil {
+				continue
+			}
 		}
 	}
 }
@@ -223,7 +243,7 @@ func (wb *WBot) SetOptions(opts ...Option) {
 }
 
 // Stream
-func (wb *WBot) Stream() <-chan *Response {
+func (wb *WBot) Stream() <-chan Response {
 	return wb.stream
 }
 
@@ -231,4 +251,7 @@ func (wb *WBot) Stream() <-chan *Response {
 func (wb *WBot) Close() {
 	wb.queue.Close()
 	wb.store.Close()
+	if wb.log != nil {
+		wb.log.Close()
+	}
 }

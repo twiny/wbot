@@ -2,7 +2,7 @@ package wbot
 
 // Logger
 type Logger interface {
-	Send(rep *Report)
+	Send(rep Report)
 	Close() error
 }
 
@@ -15,23 +15,16 @@ type Report struct {
 }
 
 // newReport
-func newReport(resp *Response, err error) *Report {
-	var (
-		rurl         = ""
-		status       = 0
-		depth  int32 = 0
-	)
-
-	if resp != nil {
-		rurl = resp.URL.String()
-		status = resp.Status
-		depth = resp.Depth
+func newReport(resp Response, err error) Report {
+	requestURL := ""
+	if resp.URL != nil {
+		requestURL = resp.URL.String()
 	}
-
-	return &Report{
-		RequestURL: rurl,
-		Status:     status,
-		Depth:      depth,
+	//
+	return Report{
+		RequestURL: requestURL,
+		Status:     resp.Status,
+		Depth:      resp.Depth,
 		Err:        err,
 	}
 }
