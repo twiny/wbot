@@ -1,4 +1,4 @@
-## WBot - a web crawler
+## WBot
 
 A configurable, thread-safe web crawler, provides a minimal interface for crawling and downloading web pages.
 

@@ -73,11 +73,6 @@ func (wb *WBot) Crawl(link string) error {
 		return err
 	}
 
-	// check filter
-	if !wb.filter.Allow(req.URL) {
-		return fmt.Errorf("not allowed")
-	}
-
 	// rate limit
 	wb.limit.take(req.URL)
 

@@ -36,20 +36,22 @@ func newFilter(allowed, disallowed []string) *filter {
 
 // Allow
 func (f *filter) Allow(l *url.URL) bool {
+	raw := l.String()
+
 	if badExtensions.MatchString(l.Path) {
 		return false
 	}
 
 	// disallowed
-	for _, r := range f.disallowed {
-		if r.MatchString(l.String()) {
+	for _, d := range f.disallowed {
+		if d.MatchString(raw) {
 			return false
 		}
 	}
 
 	// allowed
-	for _, p := range f.allowed {
-		if !p.MatchString(l.String()) {
+	for _, a := range f.allowed {
+		if !a.MatchString(raw) {
 			return false
 		}
 	}
