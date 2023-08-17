@@ -1,68 +1,58 @@
 package store
 
-import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-	"strings"
+// var (
+// 	prefix = "store"
+// )
 
-	"github.com/twiny/wbot"
-	"go.etcd.io/bbolt"
-)
+// // BStore
+// type BStore struct {
+// 	prefix string
+// 	db     *bbolt.DB
+// }
 
-var (
-	prefix = "store"
-)
+// // NewBStore
+// func NewBStore(db *bbolt.DB) (wbot.Store, error) {
+// 	// create bucket for store
+// 	if err := db.Update(func(tx *bbolt.Tx) error {
+// 		_, err := tx.CreateBucketIfNotExists([]byte(prefix))
+// 		return err
+// 	}); err != nil {
+// 		return nil, err
+// 	}
 
-// BStore
-type BStore struct {
-	prefix string
-	db     *bbolt.DB
-}
+// 	return &BStore{
+// 		prefix: prefix,
+// 		db:     db,
+// 	}, nil
+// }
 
-// NewBStore
-func NewBStore(db *bbolt.DB) (wbot.Store, error) {
-	// create bucket for store
-	if err := db.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte(prefix))
-		return err
-	}); err != nil {
-		return nil, err
-	}
+// // Visited
+// func (bs *BStore) Visited(link string) bool {
+// 	sum := sha256.Sum224([]byte(link))
 
-	return &BStore{
-		prefix: prefix,
-		db:     db,
-	}, nil
-}
+// 	//
+// 	key := strings.Join([]string{
+// 		bs.prefix,
+// 		hex.EncodeToString(sum[:]),
+// 	}, "_")
 
-// Visited
-func (bs *BStore) Visited(link string) bool {
-	sum := sha256.Sum224([]byte(link))
+// 	return bs.db.Update(func(tx *bbolt.Tx) error {
+// 		bu := tx.Bucket([]byte(prefix))
 
-	//
-	key := strings.Join([]string{
-		bs.prefix,
-		hex.EncodeToString(sum[:]),
-	}, "_")
+// 		d := bu.Get([]byte(key))
+// 		// if d == nil means not found
+// 		if d == nil {
+// 			if err := bu.Put([]byte(key), []byte(link)); err != nil {
+// 				return err
+// 			}
+// 			return nil
+// 		}
 
-	return bs.db.Update(func(tx *bbolt.Tx) error {
-		bu := tx.Bucket([]byte(prefix))
+// 		return fmt.Errorf("visited")
+// 	}) != nil
+// }
 
-		d := bu.Get([]byte(key))
-		// if d == nil means not found
-		if d == nil {
-			if err := bu.Put([]byte(key), []byte(link)); err != nil {
-				return err
-			}
-			return nil
-		}
-
-		return fmt.Errorf("visited")
-	}) != nil
-}
-
-// Close
-func (bs *BStore) Close() error {
-	return bs.db.Close()
-}
+// // Close
+// func (bs *BStore) Close() error {
+// 	return bs.db.Close()
+// }
