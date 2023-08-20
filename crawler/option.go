@@ -44,11 +44,6 @@ func WithFetcher(fetcher wbot.Fetcher) Option {
 		c.fetcher = fetcher
 	}
 }
-func WithQueue(queue wbot.Queue) Option {
-	return func(c *Crawler) {
-		c.queue = queue
-	}
-}
 func WithStore(store wbot.Store) Option {
 	return func(c *Crawler) {
 		c.store = store

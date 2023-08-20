@@ -21,7 +21,7 @@ func NewHTTPClient() wbot.Fetcher {
 	return &defaultHTTPClient{
 		client: &http.Client{
 			Jar:     http.DefaultClient.Jar,
-			Timeout: 30 * time.Second,
+			Timeout: 10 * time.Second,
 		},
 	}
 }
@@ -112,8 +112,8 @@ func newHTTPTransport(purl string) *http.Transport {
 	return &http.Transport{
 		Proxy: proxy,
 		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
+			Timeout:   10 * time.Second,
+			KeepAlive: 10 * time.Second,
 			DualStack: true,
 		}).DialContext,
 		ForceAttemptHTTP2:     true,

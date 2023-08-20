@@ -2,26 +2,29 @@ package crawler
 
 import (
 	"context"
+	"net/url"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/twiny/wbot"
 	"github.com/twiny/wbot/plugin/fetcher"
-	"github.com/twiny/wbot/plugin/queue"
 	"github.com/twiny/wbot/plugin/store"
 
 	clog "github.com/charmbracelet/log"
 )
 
 type (
+	Reader func(*wbot.Response) error
+
 	Crawler struct {
 		wg sync.WaitGroup
 
 		cfg *config
 
 		fetcher wbot.Fetcher
-		queue   wbot.Queue
 		store   wbot.Store
 		logger  wbot.Logger
 		metrics wbot.MetricsMonitor
@@ -30,9 +33,13 @@ type (
 		limiter *rateLimiter
 		robot   *robortManager
 
-		stream chan *wbot.Response
+		counter int32
+		queue   chan *wbot.Request
+		stream  chan *wbot.Response
 
 		termLog *clog.Logger
+
+		finished <-chan struct{}
 
 		ctx    context.Context
 		cancel context.CancelFunc
@@ -50,17 +57,24 @@ func New(opts ...Option) *Crawler {
 	}
 
 	c := &Crawler{
-		cfg:     newConfig(-1, nil, nil, nil),
-		filter:  newFilter(),
-		limiter: newRateLimiter(),
+		cfg: newConfig(-1, nil, nil, nil),
+
 		fetcher: fetcher.NewHTTPClient(),
-		queue:   queue.NewInMemoryQueue(),
 		store:   store.NewInMemoryStore(),
 		// logger:  newFileLogger(),
-		stream:  make(chan *wbot.Response, 2048),
+		// metrics: newMetricsMonitor(),
+
+		filter:  newFilter(),
+		limiter: newRateLimiter(),
+		// robot:   newRobotsManager(),
+
+		queue:  make(chan *wbot.Request, 1024),
+		stream: make(chan *wbot.Response, 1024),
+
 		termLog: clog.NewWithOptions(os.Stdout, options),
-		ctx:     ctx,
-		cancel:  cancel,
+
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
 	for _, opt := range opts {
@@ -68,9 +82,12 @@ func New(opts ...Option) *Crawler {
 	}
 
 	c.wg.Add(c.cfg.parallel)
+	c.termLog.Infof("starting %d workers...", c.cfg.parallel)
 	for i := 0; i < c.cfg.parallel; i++ {
-		go c.routine()
+		go c.crawl()
 	}
+
+	go c.shutdown()
 
 	return c
 }
@@ -81,27 +98,49 @@ func (c *Crawler) SetOption(opts ...Option) {
 	}
 }
 func (c *Crawler) Crawl(links ...string) {
+	var targets []*url.URL
 	for _, link := range links {
-		c.start(link)
+		target, err := wbot.ValidURL(link)
+		if err != nil {
+			c.termLog.Errorf("start: %s", err.Error())
+			continue
+		}
+		targets = append(targets, target)
 	}
-}
-func (c *Crawler) Stream() <-chan *wbot.Response {
-	return c.stream
-}
-func (c *Crawler) Wait() {
-	c.wg.Wait()
-}
-func (c *Crawler) Done() {
-	c.cancel()
-}
 
-func (c *Crawler) start(raw string) {
-	target, err := wbot.ValidURL(raw)
-	if err != nil {
-		c.termLog.Errorf("start: %s", err.Error())
+	if len(targets) == 0 {
+		c.termLog.Errorf("no valid links found")
+		c.cancel()
+		c.wg.Wait()
+		c.close()
 		return
 	}
 
+	c.termLog.Infof("crawling %d links...", len(targets))
+
+	for _, target := range targets {
+		c.start(target)
+	}
+
+	c.wg.Wait()
+}
+func (c *Crawler) Read(fn Reader) error {
+	for {
+		select {
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		case resp := <-c.stream:
+			if err := fn(resp); err != nil {
+				return err
+			}
+		}
+	}
+}
+func (c *Crawler) Done() <-chan struct{} {
+	return c.ctx.Done()
+}
+
+func (c *Crawler) start(target *url.URL) {
 	// first request
 	param := &wbot.Param{
 		MaxBodySize: c.cfg.maxBodySize,
@@ -112,129 +151,41 @@ func (c *Crawler) start(raw string) {
 		param.Proxy = c.cfg.proxies.Next()
 	}
 
-	key, err := wbot.HashLink(target.String())
+	hostname, err := wbot.Hostname(target.Hostname())
 	if err != nil {
 		// todo: log
-		// review: why error at this point? link is already validated
-		c.termLog.Errorf("hashlink -> invalid url: %s\n", target)
-		return
-	}
-
-	hostname, err := wbot.Hostname(target.String())
-	if err != nil {
-		// todo: log
-		c.termLog.Errorf("hostname -> invalid url: %s\n", target)
+		c.termLog.Errorf("hostname -> invalid url: %s", target)
 		return
 	}
 
 	req := &wbot.Request{
-		ID:       key,
 		BaseHost: hostname,
 		URL:      target,
-		Depth:    0,
+		Depth:    1,
 		Param:    param,
 	}
 
-	c.termLog.Infof("start %+v\n", req)
-
-	// todo: fix robots.txt
-	// if !c.robot.Allowed(ua, target) {
-	// 	// todo: log
-	// 	return
-	// }
-
-	c.limiter.wait(target) // should be unique hash
-
-	resp, err := c.fetcher.Fetch(context.TODO(), req)
-	if err != nil {
-		// todo: log
-		c.termLog.Errorf("fetcher -> %s\n", err.Error())
-		return
-	}
-
-	_, _ = c.store.HasVisited(context.TODO(), key)
-
-	c.stream <- resp // stream 1st response
-
-	for _, link := range resp.NextURLs {
-		u, err := req.ResolveURL(link)
-		if err != nil {
-			c.termLog.Errorf("resolve url -> %s\n", err.Error())
-			continue
-		}
-
-		// todo: this should only allow base host
-		if !strings.Contains(u.Hostname(), req.BaseHost) {
-			c.termLog.Errorf("invalid hostname: %s\n", u.Hostname())
-			continue
-		}
-
-		// add only referer & maxBodySize
-		// rest of params will be added
-		// right before fetch request
-		// to avoid rotating user agent and proxy.
-		nextParm := &wbot.Param{
-			Referer:     req.URL.String(),
-			MaxBodySize: c.cfg.maxBodySize,
-		}
-
-		nextReq := &wbot.Request{
-			ID:       key,
-			BaseHost: hostname,
-			URL:      u,
-			Depth:    req.Depth + 1,
-			Param:    nextParm,
-		}
-
-		if err := c.queue.Push(context.TODO(), nextReq); err != nil {
-			c.termLog.Errorf("push -> %s\n", err.Error())
-			continue
-		}
-	}
+	atomic.AddInt32(&c.counter, 1)
+	c.queue <- req
 }
-func (c *Crawler) routine() {
+func (c *Crawler) crawl() {
 	defer c.wg.Done()
 
 	for {
 		select {
 		case <-c.ctx.Done():
 			return
-		default:
-			req, err := c.queue.Pop(context.TODO())
-			if err != nil {
-				if err == queue.ErrQueueClosed {
-					c.termLog.Errorf("queue closed\n")
-					return
-				}
-				c.termLog.Errorf("pop -> %s\n", err.Error())
-				continue
-			}
-
-			if visited, err := c.store.HasVisited(context.TODO(), req.ID); visited {
-				if err != nil {
-					// todo: log
-					c.termLog.Errorf("has visited -> %s\n", err.Error())
-					continue
-				}
-				// todo: log
-				c.termLog.Errorf("already visited: %s\n", req.URL)
-				continue
-			}
-
+		case req := <-c.queue:
 			if req.Depth > c.cfg.maxDepth {
-				// todo: log
-				c.termLog.Errorf("max depth reached: %s\n", req.URL)
-				continue
-			}
+				atomic.AddInt32(&c.counter, -1)
 
-			// if !c.robot.Allowed(req.Param.UserAgent, req.URL.String()) {
-			// 	// todo: log
-			// 	continue
-			// }
-
-			if !c.filter.allow(req.URL) {
-				// todo: log
-				c.termLog.Errorf("filter -> %s\n", req.URL)
+				// panic: close of closed channel
+				if c.counter == 0 {
+					c.termLog.Infof("done: crawled %d links", c.counter)
+					c.cancel()
+					c.close()
+				}
+				c.termLog.Errorf("max depth reached: %s, counter: %d, queue: %d", first64Chars(req.URL.String()), c.counter, len(c.queue))
 				continue
 			}
 
@@ -243,43 +194,63 @@ func (c *Crawler) routine() {
 			resp, err := c.fetcher.Fetch(c.ctx, req)
 			if err != nil {
 				// todo: log
-				c.termLog.Errorf("fetcher -> %s\n", err.Error())
+				atomic.AddInt32(&c.counter, -1)
+				c.termLog.Errorf("fetcher -> %s", err.Error())
 				continue
 			}
 
+			atomic.AddInt32(&req.Depth, 1)
 			for _, link := range resp.NextURLs {
 				u, err := req.ResolveURL(link)
 				if err != nil {
-					c.termLog.Errorf("resolve url -> %s\n", err.Error())
+					// c.termLog.Errorf("crwal: resolve url %s -> %s", link, err.Error())
 					continue
 				}
 
-				key, err := wbot.HashLink(u.String())
+				hostname, err := wbot.Hostname(u.Hostname())
 				if err != nil {
 					// todo: log
-					c.termLog.Errorf("hashlink -> %s\n", err.Error())
+					// c.termLog.Errorf("hostname -> %s", err.Error())
 					continue
 				}
-				hostname, err := wbot.Hostname(u.String())
-				if err != nil {
+
+				if !strings.Contains(u.Hostname(), hostname) {
 					// todo: log
-					c.termLog.Errorf("hostname -> %s\n", err.Error())
+					// c.termLog.Errorf("invalid hostname: %s", u)
+					continue
+				}
+
+				// if !c.robot.Allowed(req.Param.UserAgent, req.URL.String()) {
+				// 	// todo: log
+				// 	continue
+				// }
+
+				if !c.filter.allow(u) {
+					// todo: log
+					// c.termLog.Errorf("filter -> %s", req.URL)
+					continue
+				}
+
+				if visited, err := c.store.HasVisited(context.TODO(), u.String()); visited {
+					if err != nil {
+						// todo: log
+						// c.termLog.Errorf("has visited -> %s", err.Error())
+						// continue
+					}
+					// todo: log
+					// c.termLog.Errorf("already visited: %s", req.URL)
 					continue
 				}
 
 				nextReq := &wbot.Request{
-					ID:       key,
 					BaseHost: hostname,
 					URL:      u,
-					Depth:    req.Depth + 1,
+					Depth:    req.Depth,
 					Param:    req.Param,
 				}
 
-				if err := c.queue.Push(context.TODO(), nextReq); err != nil {
-					// todo: log
-					c.termLog.Errorf("push -> %s\n", err.Error())
-					continue
-				}
+				atomic.AddInt32(&c.counter, 1)
+				c.queue <- nextReq
 			}
 
 			// if c.log != nil {
@@ -289,8 +260,48 @@ func (c *Crawler) routine() {
 
 			// stream
 			c.stream <- resp
+			atomic.AddInt32(&c.counter, -1)
 
-			c.termLog.Errorf("crawled: %s\n", req.URL)
+			c.termLog.Infof("crawled: %s, depth: %d, counter: %d, queue: %d", first64Chars(req.URL.String()), req.Depth, c.counter, len(c.queue))
 		}
 	}
+}
+func (c *Crawler) shutdown() {
+	ctx, done := signal.NotifyContext(c.ctx, os.Interrupt)
+	defer done()
+
+	<-ctx.Done()
+	c.termLog.Infof("closing...")
+
+	go func() {
+		nctx, ndone := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer ndone()
+
+		<-nctx.Done()
+		c.termLog.Errorf("force shutdown.. good bye!")
+		os.Exit(0)
+	}()
+
+	c.cancel()
+	c.wg.Wait()
+	c.close()
+}
+func (c *Crawler) close() {
+	close(c.queue)
+	close(c.stream)
+	c.store.Close()
+	c.fetcher.Close()
+}
+
+func first64Chars(s string) string {
+	if len(s) <= 64 {
+		return s
+	}
+
+	runes := []rune(s)
+	if len(runes) <= 64 {
+		return s
+	}
+
+	return string(runes[:64])
 }

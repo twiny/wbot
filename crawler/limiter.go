@@ -51,7 +51,7 @@ func newRateLimiter(limits ...*wbot.RateLimit) *rateLimiter {
 	return rl
 }
 func (l *rateLimiter) wait(link *url.URL) {
-	hostname, err := wbot.Hostname(link.String())
+	hostname, err := wbot.Hostname(link.Hostname())
 	if err != nil {
 		// case err, play safe.
 		hostname = "*"

@@ -10,7 +10,7 @@ import (
 const (
 	defaultReferrer    = "https://www.google.com/search"
 	defaultUserAgent   = "WBot/0.1.6 (+https://github.com/twiny/wbot)"
-	defaultTimeout     = 30 * time.Second
+	defaultTimeout     = 10 * time.Second
 	defaultMaxBodySize = int64(1024 * 1024 * 5) // 5MB
 )
 
@@ -29,6 +29,7 @@ func newConfig(maxDepth int32, userAgents, referrers, proxies []string) *config 
 	if maxDepth <= 0 {
 		maxDepth = 10
 	}
+
 	var conf = &config{
 		parallel:    runtime.NumCPU(),
 		maxDepth:    maxDepth,

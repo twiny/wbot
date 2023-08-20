@@ -21,14 +21,8 @@ type (
 		Close() error
 	}
 
-	Queue interface {
-		Push(ctx context.Context, req *Request) error
-		Pop(ctx context.Context) (*Request, error)
-		Close() error
-	}
-
 	Store interface {
-		HasVisited(ctx context.Context, key string) (bool, error)
+		HasVisited(ctx context.Context, link string) (bool, error)
 		Close() error
 	}
 
@@ -143,9 +137,11 @@ func FindLinks(body []byte) (hrefs []string) {
 			hrefs = append(hrefs, src)
 		}
 	})
-
-	// ... Add other tags and attributes as necessary
-
+	doc.Find("iframe[src]").Each(func(index int, item *goquery.Selection) {
+		if src, found := item.Attr("src"); found {
+			hrefs = append(hrefs, src)
+		}
+	})
 	return hrefs
 }
 

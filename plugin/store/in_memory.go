@@ -23,7 +23,18 @@ func (s *defaultInMemoryStore) HasVisited(ctx context.Context, link string) (boo
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.table[link], nil
+	hash, err := wbot.HashLink(link)
+	if err != nil {
+		return false, err
+	}
+
+	_, found := s.table[hash]
+	if !found {
+		s.table[hash] = true
+		return false, nil
+	}
+
+	return found, nil
 }
 func (s *defaultInMemoryStore) Close() error {
 	return nil
