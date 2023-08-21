@@ -50,6 +50,8 @@ github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcU
 github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
 github.com/temoto/robotstxt v1.1.2 h1:W2pOjSJ6SWvldyEuiFXNxz3xZ8aiWX5LbfDiOFd7Fxg=
 github.com/temoto/robotstxt v1.1.2/go.mod h1:+1AmkuG3IYkh1kv0d2qEB9Le88ehNO0zwOr3ujewlOo=
+github.com/twiny/flare v0.1.0 h1:bq50IXYNUpiJULoIXXwerL1gwr+KBz49ayYgQo/CqnY=
+github.com/twiny/flare v0.1.0/go.mod h1:Rlzkek5PDlOGFue015tC7fe/ROyeSx3hqy+jfAZGezQ=
 github.com/twiny/flog/v2 v2.0.0 h1:uHyWg1/q1P5zi/5jOiZyFZBfUZwd416v+9J+fnIBMZY=
 github.com/twiny/flog/v2 v2.0.0/go.mod h1:ujV9tY/hkP9302AgmXcpA/ds1/prAymijvIoxF9zzbM=
 github.com/twiny/poxa v0.1.0 h1:NMM1ZeRfGFVOz60NjHR4r78pQYkq09VyOjKjdkhkWsE=

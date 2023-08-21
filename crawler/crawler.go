@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/url"
 	"os"
-	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,12 +12,12 @@ import (
 	"github.com/twiny/wbot/plugin/fetcher"
 	"github.com/twiny/wbot/plugin/store"
 
+	"github.com/twiny/flare"
+
 	clog "github.com/charmbracelet/log"
 )
 
 type (
-	Reader func(*wbot.Response) error
-
 	Crawler struct {
 		wg sync.WaitGroup
 
@@ -37,19 +36,17 @@ type (
 		queue   chan *wbot.Request
 		stream  chan *wbot.Response
 
+		finished flare.Notifier
+		quit     flare.Notifier
+
 		termLog *clog.Logger
-
-		finished <-chan struct{}
-
-		ctx    context.Context
-		cancel context.CancelFunc
 	}
+
+	Reader func(*wbot.Response) error
 )
 
 func New(opts ...Option) *Crawler {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	options := clog.Options{
+	logOpt := clog.Options{
 		TimeFormat:      "2006-01-02 15:04:05",
 		Level:           clog.DebugLevel,
 		Prefix:          "[WBot]",
@@ -71,10 +68,10 @@ func New(opts ...Option) *Crawler {
 		queue:  make(chan *wbot.Request, 1024),
 		stream: make(chan *wbot.Response, 1024),
 
-		termLog: clog.NewWithOptions(os.Stdout, options),
+		termLog: clog.NewWithOptions(os.Stdout, logOpt),
 
-		ctx:    ctx,
-		cancel: cancel,
+		finished: flare.New(),
+		quit:     flare.New(),
 	}
 
 	for _, opt := range opts {
@@ -84,10 +81,8 @@ func New(opts ...Option) *Crawler {
 	c.wg.Add(c.cfg.parallel)
 	c.termLog.Infof("starting %d workers...", c.cfg.parallel)
 	for i := 0; i < c.cfg.parallel; i++ {
-		go c.crawl()
+		go c.crawler()
 	}
-
-	go c.shutdown()
 
 	return c
 }
@@ -110,9 +105,11 @@ func (c *Crawler) Crawl(links ...string) {
 
 	if len(targets) == 0 {
 		c.termLog.Errorf("no valid links found")
-		c.cancel()
+		c.finished.Cancel()
+		c.quit.Cancel()
 		c.wg.Wait()
-		c.close()
+		close(c.queue)
+		close(c.stream)
 		return
 	}
 
@@ -127,8 +124,10 @@ func (c *Crawler) Crawl(links ...string) {
 func (c *Crawler) Read(fn Reader) error {
 	for {
 		select {
-		case <-c.ctx.Done():
-			return c.ctx.Err()
+		case <-c.quit.Done():
+			return nil
+		case <-c.finished.Done():
+			return nil
 		case resp := <-c.stream:
 			if err := fn(resp); err != nil {
 				return err
@@ -136,8 +135,13 @@ func (c *Crawler) Read(fn Reader) error {
 		}
 	}
 }
-func (c *Crawler) Done() <-chan struct{} {
-	return c.ctx.Done()
+func (c *Crawler) Close() {
+	c.termLog.Infof("done: crawled %d links", c.counter)
+	c.finished.Cancel()
+	c.quit.Cancel()
+	c.wg.Wait()
+	c.store.Close()
+	c.fetcher.Close()
 }
 
 func (c *Crawler) start(target *url.URL) {
@@ -168,30 +172,36 @@ func (c *Crawler) start(target *url.URL) {
 	atomic.AddInt32(&c.counter, 1)
 	c.queue <- req
 }
-func (c *Crawler) crawl() {
+func (c *Crawler) crawler() {
 	defer c.wg.Done()
 
+	c.termLog.Debugf("worker started")
 	for {
 		select {
-		case <-c.ctx.Done():
+		case <-c.quit.Done():
+			c.termLog.Debugf("worker quit")
 			return
+		case <-c.finished.Done():
+			c.termLog.Debugf("worker finished")
+			return
+			// continue
 		case req := <-c.queue:
 			if req.Depth > c.cfg.maxDepth {
 				atomic.AddInt32(&c.counter, -1)
 
-				// panic: close of closed channel
 				if c.counter == 0 {
 					c.termLog.Infof("done: crawled %d links", c.counter)
-					c.cancel()
-					c.close()
+					c.finished.Cancel()
+					c.quit.Cancel()
+					return
 				}
-				c.termLog.Errorf("max depth reached: %s, counter: %d, queue: %d", first64Chars(req.URL.String()), c.counter, len(c.queue))
+				// c.termLog.Errorf("max depth reached: %s, counter: %d, queue: %d", first64Chars(req.URL.String()), c.counter, len(c.queue))
 				continue
 			}
 
 			c.limiter.wait(req.URL)
 
-			resp, err := c.fetcher.Fetch(c.ctx, req)
+			resp, err := c.fetcher.Fetch(context.TODO(), req)
 			if err != nil {
 				// todo: log
 				atomic.AddInt32(&c.counter, -1)
@@ -265,32 +275,6 @@ func (c *Crawler) crawl() {
 			c.termLog.Infof("crawled: %s, depth: %d, counter: %d, queue: %d", first64Chars(req.URL.String()), req.Depth, c.counter, len(c.queue))
 		}
 	}
-}
-func (c *Crawler) shutdown() {
-	ctx, done := signal.NotifyContext(c.ctx, os.Interrupt)
-	defer done()
-
-	<-ctx.Done()
-	c.termLog.Infof("closing...")
-
-	go func() {
-		nctx, ndone := signal.NotifyContext(context.Background(), os.Interrupt)
-		defer ndone()
-
-		<-nctx.Done()
-		c.termLog.Errorf("force shutdown.. good bye!")
-		os.Exit(0)
-	}()
-
-	c.cancel()
-	c.wg.Wait()
-	c.close()
-}
-func (c *Crawler) close() {
-	close(c.queue)
-	close(c.stream)
-	c.store.Close()
-	c.fetcher.Close()
 }
 
 func first64Chars(s string) string {

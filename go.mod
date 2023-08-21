@@ -6,6 +6,7 @@ require (
 	github.com/PuerkitoBio/goquery v1.8.1
 	github.com/charmbracelet/log v0.2.3
 	github.com/temoto/robotstxt v1.1.2
+	github.com/twiny/flare v0.1.0
 	github.com/twiny/flog/v2 v2.0.0
 	github.com/twiny/poxa v0.1.0
 	github.com/twiny/ratelimit v0.0.0-20220509163414-256d3376b0ac
