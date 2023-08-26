@@ -1,7 +1,6 @@
 package crawler
 
 import (
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -50,14 +49,8 @@ func newRateLimiter(limits ...*wbot.RateLimit) *rateLimiter {
 
 	return rl
 }
-func (l *rateLimiter) wait(link *url.URL) {
-	hostname, err := wbot.Hostname(link.Hostname())
-	if err != nil {
-		// case err, play safe.
-		hostname = "*"
-	}
-
-	limit, found := l.table[hostname]
+func (l *rateLimiter) wait(u *wbot.ParsedURL) {
+	limit, found := l.table[u.Root]
 	if !found {
 		limit = l.table["*"]
 	}

@@ -73,7 +73,7 @@ func (f *defaultHTTPClient) fetch(req *wbot.Request) (*wbot.Response, error) {
 
 	resp, err := f.client.Do(&http.Request{
 		Method:     http.MethodGet,
-		URL:        req.URL,
+		URL:        req.Target.URL,
 		Header:     header,
 		Proto:      "HTTP/1.1",
 		ProtoMajor: 1,
@@ -93,11 +93,26 @@ func (f *defaultHTTPClient) fetch(req *wbot.Request) (*wbot.Response, error) {
 
 	resp.Body.Close()
 
+	links := wbot.FindLinks(body)
+
+	var nextURLs []*wbot.ParsedURL
+	for _, link := range links {
+		absURL, err := req.ResolveURL(link)
+		if err != nil {
+			continue
+		}
+		parsedURL, err := wbot.NewURL(absURL.String())
+		if err != nil {
+			continue
+		}
+		nextURLs = append(nextURLs, parsedURL)
+	}
+
 	return &wbot.Response{
-		URL:      req.URL,
+		URL:      req.Target,
 		Status:   resp.StatusCode,
 		Body:     body,
-		NextURLs: wbot.FindLinks(body),
+		NextURLs: nextURLs,
 		Depth:    req.Depth,
 	}, nil
 }

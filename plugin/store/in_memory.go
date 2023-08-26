@@ -9,7 +9,7 @@ import (
 
 type (
 	defaultInMemoryStore struct {
-		mu    sync.RWMutex
+		mu    sync.Mutex
 		table map[string]bool
 	}
 )
@@ -19,23 +19,19 @@ func NewInMemoryStore() wbot.Store {
 		table: make(map[string]bool),
 	}
 }
-func (s *defaultInMemoryStore) HasVisited(ctx context.Context, link string) (bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (s *defaultInMemoryStore) HasVisited(ctx context.Context, link *wbot.ParsedURL) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	hash, err := wbot.HashLink(link)
-	if err != nil {
-		return false, err
-	}
-
-	_, found := s.table[hash]
+	_, found := s.table[link.Hash]
 	if !found {
-		s.table[hash] = true
+		s.table[link.Hash] = true
 		return false, nil
 	}
 
 	return found, nil
 }
 func (s *defaultInMemoryStore) Close() error {
+	clear(s.table)
 	return nil
 }

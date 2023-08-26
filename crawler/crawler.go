@@ -2,7 +2,7 @@ package crawler
 
 import (
 	"context"
-	"net/url"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -10,11 +10,21 @@ import (
 
 	"github.com/twiny/wbot"
 	"github.com/twiny/wbot/plugin/fetcher"
+	"github.com/twiny/wbot/plugin/queue"
 	"github.com/twiny/wbot/plugin/store"
 
 	"github.com/twiny/flare"
 
 	clog "github.com/charmbracelet/log"
+)
+
+type CrawlState int32
+
+const (
+	CrawlQuit CrawlState = iota
+	CrawlFinished
+	CrawlInProgress
+	CrawlPaused
 )
 
 type (
@@ -26,6 +36,7 @@ type (
 		fetcher wbot.Fetcher
 		store   wbot.Store
 		logger  wbot.Logger
+		queue   wbot.Queue
 		metrics wbot.MetricsMonitor
 
 		filter  *filter
@@ -33,16 +44,14 @@ type (
 		robot   *robortManager
 
 		counter int32
-		queue   chan *wbot.Request
 		stream  chan *wbot.Response
+		errors  chan error
 
-		finished flare.Notifier
-		quit     flare.Notifier
+		state CrawlState
+		quit  flare.Notifier
 
 		termLog *clog.Logger
 	}
-
-	Reader func(*wbot.Response) error
 )
 
 func New(opts ...Option) *Crawler {
@@ -59,23 +68,51 @@ func New(opts ...Option) *Crawler {
 		fetcher: fetcher.NewHTTPClient(),
 		store:   store.NewInMemoryStore(),
 		// logger:  newFileLogger(),
+		queue: queue.NewInMemoryQueue(),
 		// metrics: newMetricsMonitor(),
 
 		filter:  newFilter(),
 		limiter: newRateLimiter(),
 		// robot:   newRobotsManager(),
 
-		queue:  make(chan *wbot.Request, 1024),
-		stream: make(chan *wbot.Response, 1024),
+		stream: make(chan *wbot.Response, 16),
+		errors: make(chan error, 16),
 
 		termLog: clog.NewWithOptions(os.Stdout, logOpt),
 
-		finished: flare.New(),
-		quit:     flare.New(),
+		quit: flare.New(),
 	}
 
 	for _, opt := range opts {
 		opt(c)
+	}
+
+	return c
+}
+
+func (c *Crawler) Start(links ...string) error {
+	var targets []*wbot.ParsedURL
+	for _, link := range links {
+		target, err := wbot.NewURL(link)
+		if err != nil {
+			c.errors <- fmt.Errorf("start: %w", err)
+			continue
+		}
+		targets = append(targets, target)
+	}
+
+	if len(targets) == 0 {
+		c.quit.Cancel()
+		c.wg.Wait()
+		close(c.stream)
+		return fmt.Errorf("no links to crawl")
+	}
+
+	c.termLog.Infof("crawling %d links...", len(targets))
+
+	for _, target := range targets {
+		c.wg.Add(1)
+		go c.start(target)
 	}
 
 	c.wg.Add(c.cfg.parallel)
@@ -84,68 +121,59 @@ func New(opts ...Option) *Crawler {
 		go c.crawler()
 	}
 
-	return c
-}
-
-func (c *Crawler) SetOption(opts ...Option) {
-	for _, opt := range opts {
-		opt(c)
-	}
-}
-func (c *Crawler) Crawl(links ...string) {
-	var targets []*url.URL
-	for _, link := range links {
-		target, err := wbot.ValidURL(link)
-		if err != nil {
-			c.termLog.Errorf("start: %s", err.Error())
-			continue
-		}
-		targets = append(targets, target)
-	}
-
-	if len(targets) == 0 {
-		c.termLog.Errorf("no valid links found")
-		c.finished.Cancel()
-		c.quit.Cancel()
-		c.wg.Wait()
-		close(c.queue)
-		close(c.stream)
-		return
-	}
-
-	c.termLog.Infof("crawling %d links...", len(targets))
-
-	for _, target := range targets {
-		c.start(target)
-	}
-
 	c.wg.Wait()
+	return nil
 }
-func (c *Crawler) Read(fn Reader) error {
-	for {
-		select {
-		case <-c.quit.Done():
-			return nil
-		case <-c.finished.Done():
-			return nil
-		case resp := <-c.stream:
-			if err := fn(resp); err != nil {
-				return err
+func (c *Crawler) OnReponse(fn func(*wbot.Response) error) {
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+
+		for {
+			select {
+			case <-c.quit.Done():
+				return
+			case resp := <-c.stream:
+				if err := fn(resp); err != nil {
+					c.errors <- err
+				}
 			}
 		}
-	}
+	}()
+}
+func (c *Crawler) OnError(fn func(err error)) {
+	c.wg.Add(1)
+
+	go func() {
+		defer c.wg.Done()
+
+		for {
+			select {
+			case <-c.quit.Done():
+				return
+			case err := <-c.errors:
+				fn(err)
+			}
+		}
+	}()
+}
+func (c *Crawler) Stats() map[string]any {
+	return map[string]any{}
 }
 func (c *Crawler) Close() {
-	c.termLog.Infof("done: crawled %d links", c.counter)
-	c.finished.Cancel()
+	c.termLog.Debugf("closing...")
 	c.quit.Cancel()
 	c.wg.Wait()
 	c.store.Close()
 	c.fetcher.Close()
 }
 
-func (c *Crawler) start(target *url.URL) {
-	// first request
+func (c *Crawler) start(target *wbot.ParsedURL) {
+	defer func() {
+		c.wg.Done()
+		atomic.AddInt32(&c.counter, 1)
+	}()
+
 	param := &wbot.Param{
 		MaxBodySize: c.cfg.maxBodySize,
 		UserAgent:   c.cfg.userAgents.Next(),
@@ -155,78 +183,65 @@ func (c *Crawler) start(target *url.URL) {
 		param.Proxy = c.cfg.proxies.Next()
 	}
 
-	hostname, err := wbot.Hostname(target.Hostname())
-	if err != nil {
-		// todo: log
-		c.termLog.Errorf("hostname -> invalid url: %s", target)
+	req := &wbot.Request{
+		Target: target,
+		Param:  param,
+		Depth:  0,
+	}
+
+	if err := c.queue.Push(context.TODO(), req); err != nil {
+		c.errors <- fmt.Errorf("push: %w", err)
 		return
 	}
 
-	req := &wbot.Request{
-		BaseHost: hostname,
-		URL:      target,
-		Depth:    1,
-		Param:    param,
-	}
-
-	atomic.AddInt32(&c.counter, 1)
-	c.queue <- req
 }
 func (c *Crawler) crawler() {
 	defer c.wg.Done()
 
-	c.termLog.Debugf("worker started")
 	for {
 		select {
 		case <-c.quit.Done():
-			c.termLog.Debugf("worker quit")
+			c.termLog.Debugf("quit")
+			c.queue.Close() // must close queue before quit
 			return
-		case <-c.finished.Done():
-			c.termLog.Debugf("worker finished")
-			return
-			// continue
-		case req := <-c.queue:
-			if req.Depth > c.cfg.maxDepth {
-				atomic.AddInt32(&c.counter, -1)
+		default:
+			func() {
+				defer atomic.AddInt32(&c.counter, -1)
+			}()
 
-				if c.counter == 0 {
-					c.termLog.Infof("done: crawled %d links", c.counter)
-					c.finished.Cancel()
-					c.quit.Cancel()
-					return
-				}
-				// c.termLog.Errorf("max depth reached: %s, counter: %d, queue: %d", first64Chars(req.URL.String()), c.counter, len(c.queue))
+			req, err := c.queue.Pop(context.TODO())
+			if err != nil {
+				// atomic.AddInt32(&c.counter, -1)
+				// c.termLog.Errorf("pop: %s", err.Error())
 				continue
 			}
 
-			c.limiter.wait(req.URL)
+			if req.Depth > c.cfg.maxDepth {
+				// atomic.AddInt32(&c.counter, -1)
+
+				if c.queue.Len()+atomic.LoadInt32(&c.counter) == 0 {
+					c.quit.Cancel()
+					fmt.Println("queue len:", c.queue.Len())
+					continue
+				}
+
+				continue
+			}
+
+			c.limiter.wait(req.Target)
 
 			resp, err := c.fetcher.Fetch(context.TODO(), req)
 			if err != nil {
 				// todo: log
-				atomic.AddInt32(&c.counter, -1)
-				c.termLog.Errorf("fetcher -> %s", err.Error())
+				// atomic.AddInt32(&c.counter, -1)
+				c.errors <- fmt.Errorf("fetch: %w", err)
 				continue
 			}
 
 			atomic.AddInt32(&req.Depth, 1)
-			for _, link := range resp.NextURLs {
-				u, err := req.ResolveURL(link)
-				if err != nil {
-					// c.termLog.Errorf("crwal: resolve url %s -> %s", link, err.Error())
-					continue
-				}
-
-				hostname, err := wbot.Hostname(u.Hostname())
-				if err != nil {
-					// todo: log
-					// c.termLog.Errorf("hostname -> %s", err.Error())
-					continue
-				}
-
-				if !strings.Contains(u.Hostname(), hostname) {
-					// todo: log
-					// c.termLog.Errorf("invalid hostname: %s", u)
+			for _, target := range resp.NextURLs {
+				if !strings.Contains(target.URL.Host, req.Target.Root) {
+					c.errors <- fmt.Errorf("hostname check: %w", err)
 					continue
 				}
 
@@ -235,32 +250,32 @@ func (c *Crawler) crawler() {
 				// 	continue
 				// }
 
-				if !c.filter.allow(u) {
-					// todo: log
-					// c.termLog.Errorf("filter -> %s", req.URL)
+				if !c.filter.allow(target) {
+					c.errors <- fmt.Errorf("allow check: %w", err)
 					continue
 				}
 
-				if visited, err := c.store.HasVisited(context.TODO(), u.String()); visited {
+				if visited, err := c.store.HasVisited(context.TODO(), target); visited {
 					if err != nil {
-						// todo: log
-						// c.termLog.Errorf("has visited -> %s", err.Error())
-						// continue
+						c.errors <- fmt.Errorf("has visited 1: %w", err)
+						continue
 					}
-					// todo: log
-					// c.termLog.Errorf("already visited: %s", req.URL)
+					c.errors <- fmt.Errorf("has visited 2: %w", err)
 					continue
 				}
 
 				nextReq := &wbot.Request{
-					BaseHost: hostname,
-					URL:      u,
-					Depth:    req.Depth,
-					Param:    req.Param,
+					Target: target,
+					Depth:  req.Depth,
+					Param:  req.Param,
+				}
+
+				if err := c.queue.Push(context.TODO(), nextReq); err != nil {
+					c.errors <- fmt.Errorf("push: %w", err)
+					continue
 				}
 
 				atomic.AddInt32(&c.counter, 1)
-				c.queue <- nextReq
 			}
 
 			// if c.log != nil {
@@ -270,9 +285,14 @@ func (c *Crawler) crawler() {
 
 			// stream
 			c.stream <- resp
-			atomic.AddInt32(&c.counter, -1)
+			// atomic.AddInt32(&c.counter, -1)
 
-			c.termLog.Infof("crawled: %s, depth: %d, counter: %d, queue: %d", first64Chars(req.URL.String()), req.Depth, c.counter, len(c.queue))
+			c.termLog.Infof("crawled: %s, depth: %d, counter: %d, queue: %d", first64Chars(req.Target.URL.String()), req.Depth, c.counter, c.queue.Len())
+
+			if c.queue.Len()+atomic.LoadInt32(&c.counter) == 0 {
+				c.queue.Close() // must close queue before quit
+				continue
+			}
 		}
 	}
 }

@@ -22,7 +22,14 @@ type (
 	}
 
 	Store interface {
-		HasVisited(ctx context.Context, link string) (bool, error)
+		HasVisited(ctx context.Context, u *ParsedURL) (bool, error)
+		Close() error
+	}
+
+	Queue interface {
+		Push(ctx context.Context, req *Request) error
+		Pop(ctx context.Context) (*Request, error)
+		Len() int32
 		Close() error
 	}
 
@@ -32,37 +39,41 @@ type (
 	}
 
 	MetricsMonitor interface {
-		IncrementTotalRequests()
-		IncrementSuccessfulRequests()
-		IncrementFailedRequests()
-		IncrementRetries()
-		IncrementRedirects()
+		IncTotalRequests()
+		IncSuccessfulRequests()
+		IncFailedRequests()
+		IncRetries()
+		IncRedirects()
 
-		IncrementTotalPages()
-		IncrementCrawledPages()
-		IncrementSkippedPages()
-		IncrementParsedLinks()
+		IncTotalPages()
+		IncCrawledPages()
+		IncSkippedPages()
+		IncParsedLinks()
 
-		IncrementClientErrors()
-		IncrementServerErrors()
+		IncClientErrors()
+		IncServerErrors()
 	}
 
 	Request struct {
-		ID       string
-		BaseHost string
-		URL      *url.URL
-		Depth    int32
-		Param    *Param
+		Target *ParsedURL
+		Param  *Param
+		Depth  int32
 	}
 
 	Response struct {
-		URL         *url.URL
+		URL         *ParsedURL
 		Status      int
 		Body        []byte
-		NextURLs    []string
+		NextURLs    []*ParsedURL
 		Depth       int32
 		ElapsedTime time.Duration
 		Err         error
+	}
+
+	ParsedURL struct {
+		Hash string
+		Root string
+		URL  *url.URL
 	}
 
 	Param struct {
@@ -101,7 +112,7 @@ func (r *Request) ResolveURL(u string) (*url.URL, error) {
 		return nil, fmt.Errorf("url is a fragment")
 	}
 
-	absURL, err := r.URL.Parse(u)
+	absURL, err := r.Target.URL.Parse(u)
 	if err != nil {
 		return nil, err
 	}
@@ -145,12 +156,41 @@ func FindLinks(body []byte) (hrefs []string) {
 	return hrefs
 }
 
-func HashLink(link string) (string, error) {
-	parsedLink, err := url.Parse(link)
+func NewURL(raw string) (*ParsedURL, error) {
+	u, err := url.Parse(raw)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("invalid scheme: %s", u.Scheme)
+	}
+
+	// Extract domain and TLD using publicsuffix-go
+	domain, err := publicsuffix.Domain(u.Hostname())
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract domain: %w", err)
+	}
+
+	// Ensure that the extracted TLD is in our allowed list
+	tld := domain[strings.LastIndex(domain, ".")+1:]
+	if !tlds[tld] {
+		return nil, fmt.Errorf("invalid TLD: %s", tld)
+	}
+
+	hash, err := hashLink(*u)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hash: %s", hash)
+	}
+
+	return &ParsedURL{
+		Hash: hash,
+		Root: domain,
+		URL:  u,
+	}, nil
+}
+
+func hashLink(parsedLink url.URL) (string, error) {
 	parsedLink.Scheme = ""
 
 	parsedLink.Host = strings.TrimPrefix(parsedLink.Host, "www.")
@@ -169,25 +209,4 @@ func HashLink(link string) (string, error) {
 	hasher.Write([]byte(cleanedURL))
 
 	return hex.EncodeToString(hasher.Sum(nil)), nil
-}
-
-func Hostname(link string) (string, error) {
-	hostname, err := publicsuffix.Domain(link)
-	if err != nil {
-		return "", fmt.Errorf("failed to get domain: %w", err)
-	}
-	return hostname, nil
-}
-
-func ValidURL(raw string) (*url.URL, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return nil, err
-	}
-
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("invalid scheme: %s", u.Scheme)
-	}
-
-	return u, nil
 }
