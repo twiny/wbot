@@ -8,10 +8,6 @@ import (
 	"github.com/twiny/wbot"
 )
 
-var (
-	ErrQueueClosed = fmt.Errorf("queue is closed")
-)
-
 type defaultInMemoryQueue struct {
 	mu     sync.Mutex
 	list   []*wbot.Request
@@ -32,7 +28,7 @@ func (q *defaultInMemoryQueue) Push(ctx context.Context, req *wbot.Request) erro
 	defer q.mu.Unlock()
 
 	if q.closed {
-		return ErrQueueClosed
+		return fmt.Errorf("queue is closed")
 	}
 
 	q.list = append(q.list, req)
@@ -40,7 +36,6 @@ func (q *defaultInMemoryQueue) Push(ctx context.Context, req *wbot.Request) erro
 
 	return nil
 }
-
 func (q *defaultInMemoryQueue) Pop(ctx context.Context) (*wbot.Request, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -50,21 +45,32 @@ func (q *defaultInMemoryQueue) Pop(ctx context.Context) (*wbot.Request, error) {
 	}
 
 	if q.closed && len(q.list) == 0 {
-		return nil, ErrQueueClosed
+		return nil, fmt.Errorf("queue is closed")
 	}
 
 	req := q.list[0]
 	q.list = q.list[1:]
 	return req, nil
 }
-
 func (q *defaultInMemoryQueue) Len() int32 {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	return int32(len(q.list))
 }
+func (q *defaultInMemoryQueue) IsDone() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 
+	return q.closed && len(q.list) == 0
+}
+func (q *defaultInMemoryQueue) Cancel() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.closed = true
+	q.cond.Broadcast()
+}
 func (q *defaultInMemoryQueue) Close() error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -72,5 +78,6 @@ func (q *defaultInMemoryQueue) Close() error {
 	q.closed = true
 	q.cond.Broadcast()
 
+	clear(q.list)
 	return nil
 }

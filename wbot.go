@@ -30,11 +30,8 @@ type (
 		Push(ctx context.Context, req *Request) error
 		Pop(ctx context.Context) (*Request, error)
 		Len() int32
-		Close() error
-	}
-
-	Logger interface {
-		Write(ctx context.Context, log *Log) error
+		Cancel()
+		IsDone() bool
 		Close() error
 	}
 
@@ -93,18 +90,6 @@ type (
 		Hostname string
 		Rate     string
 	}
-
-	Log struct {
-		RequestURL   string
-		Status       int
-		Depth        int32
-		Err          error
-		Timestamp    time.Time
-		ResponseTime time.Duration
-		ContentSize  int64
-		UserAgent    string
-		RedirectURL  string
-	}
 )
 
 func (r *Request) ResolveURL(u string) (*url.URL, error) {
@@ -120,6 +105,13 @@ func (r *Request) ResolveURL(u string) (*url.URL, error) {
 	absURL.Fragment = ""
 
 	return absURL, nil
+}
+func (u *ParsedURL) String() string {
+	var link = u.URL.String()
+	if len(link) > 64 {
+		return link[:64]
+	}
+	return link
 }
 
 func FindLinks(body []byte) (hrefs []string) {

@@ -2,140 +2,148 @@ package crawler
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/twiny/wbot"
 	"github.com/twiny/wbot/plugin/fetcher"
+	"github.com/twiny/wbot/plugin/monitor"
 	"github.com/twiny/wbot/plugin/queue"
 	"github.com/twiny/wbot/plugin/store"
 
 	"github.com/twiny/flare"
-
-	clog "github.com/charmbracelet/log"
 )
 
-type CrawlState int32
-
 const (
-	CrawlQuit CrawlState = iota
-	CrawlFinished
-	CrawlInProgress
-	CrawlPaused
+	crawlInProgress int32 = iota
+	crawlFinished
 )
 
 type (
 	Crawler struct {
-		wg sync.WaitGroup
-
+		wg  *sync.WaitGroup
 		cfg *config
 
 		fetcher wbot.Fetcher
 		store   wbot.Store
-		logger  wbot.Logger
 		queue   wbot.Queue
 		metrics wbot.MetricsMonitor
 
 		filter  *filter
 		limiter *rateLimiter
-		robot   *robortManager
+		robot   *robotManager
 
-		counter int32
-		stream  chan *wbot.Response
-		errors  chan error
+		stream chan *wbot.Response
+		errors chan error
 
-		state CrawlState
-		quit  flare.Notifier
-
-		termLog *clog.Logger
+		once   *sync.Once
+		status int32
+		quit   flare.Notifier
 	}
 )
 
 func New(opts ...Option) *Crawler {
-	logOpt := clog.Options{
-		TimeFormat:      "2006-01-02 15:04:05",
-		Level:           clog.DebugLevel,
-		Prefix:          "[WBot]",
-		ReportTimestamp: true,
-	}
-
 	c := &Crawler{
+		wg:  new(sync.WaitGroup),
 		cfg: newConfig(-1, nil, nil, nil),
 
 		fetcher: fetcher.NewHTTPClient(),
 		store:   store.NewInMemoryStore(),
-		// logger:  newFileLogger(),
-		queue: queue.NewInMemoryQueue(),
-		// metrics: newMetricsMonitor(),
+		queue:   queue.NewInMemoryQueue(),
+		metrics: monitor.NewmetricsMonitor(),
 
 		filter:  newFilter(),
 		limiter: newRateLimiter(),
-		// robot:   newRobotsManager(),
+		robot:   newRobotManager(false),
 
-		stream: make(chan *wbot.Response, 16),
-		errors: make(chan error, 16),
+		stream: make(chan *wbot.Response, 1024),
+		errors: make(chan error, 1024),
 
-		termLog: clog.NewWithOptions(os.Stdout, logOpt),
-
-		quit: flare.New(),
+		once:   new(sync.Once),
+		status: crawlFinished,
+		quit:   flare.New(),
 	}
 
 	for _, opt := range opts {
 		opt(c)
 	}
 
+	// this routine waits for quit signal
+	go func() {
+		<-c.quit.Done()
+		fmt.Println("Crawler is shutting down")
+		atomic.StoreInt32(&c.status, crawlFinished)
+
+		close(c.stream)
+		close(c.errors)
+		c.wg.Wait()
+		c.queue.Close()
+		c.store.Close()
+		c.fetcher.Close()
+	}()
+
 	return c
 }
 
 func (c *Crawler) Start(links ...string) error {
-	var targets []*wbot.ParsedURL
+	var (
+		targets []*wbot.ParsedURL
+		errs    []error
+	)
 	for _, link := range links {
 		target, err := wbot.NewURL(link)
 		if err != nil {
-			c.errors <- fmt.Errorf("start: %w", err)
+			errs = append(errs, err)
 			continue
 		}
 		targets = append(targets, target)
 	}
 
+	if len(errs) > 0 {
+		c.quit.Cancel()
+		return fmt.Errorf("invalid targets: %v", errors.Join(errs...))
+	}
+
 	if len(targets) == 0 {
 		c.quit.Cancel()
-		c.wg.Wait()
-		close(c.stream)
-		return fmt.Errorf("no links to crawl")
+		return fmt.Errorf("no valid targets: %v", errs)
 	}
 
-	c.termLog.Infof("crawling %d links...", len(targets))
-
+	atomic.StoreInt32(&c.status, crawlInProgress)
 	for _, target := range targets {
 		c.wg.Add(1)
-		go c.start(target)
+		go func(t *wbot.ParsedURL) {
+			if err := c.start(t); err != nil {
+				c.errors <- fmt.Errorf("start: %w", err)
+			}
+		}(target)
 	}
 
-	c.wg.Add(c.cfg.parallel)
-	c.termLog.Infof("starting %d workers...", c.cfg.parallel)
 	for i := 0; i < c.cfg.parallel; i++ {
-		go c.crawler()
+		c.wg.Add(1)
+		go c.crawler(i)
 	}
 
+	fmt.Println("Crawler is running")
 	c.wg.Wait()
+	fmt.Println("Crawler has stopped")
+
 	return nil
 }
-func (c *Crawler) OnReponse(fn func(*wbot.Response) error) {
+func (c *Crawler) OnReponse(fn func(*wbot.Response)) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-
 		for {
 			select {
 			case <-c.quit.Done():
 				return
-			case resp := <-c.stream:
-				if err := fn(resp); err != nil {
-					c.errors <- err
+			case resp, ok := <-c.stream:
+				if ok {
+					fn(resp)
 				}
 			}
 		}
@@ -143,16 +151,16 @@ func (c *Crawler) OnReponse(fn func(*wbot.Response) error) {
 }
 func (c *Crawler) OnError(fn func(err error)) {
 	c.wg.Add(1)
-
 	go func() {
 		defer c.wg.Done()
-
 		for {
 			select {
 			case <-c.quit.Done():
 				return
-			case err := <-c.errors:
-				fn(err)
+			case err, ok := <-c.errors:
+				if ok {
+					fn(err)
+				}
 			}
 		}
 	}()
@@ -160,19 +168,12 @@ func (c *Crawler) OnError(fn func(err error)) {
 func (c *Crawler) Stats() map[string]any {
 	return map[string]any{}
 }
-func (c *Crawler) Close() {
-	c.termLog.Debugf("closing...")
+func (c *Crawler) Stop() {
 	c.quit.Cancel()
-	c.wg.Wait()
-	c.store.Close()
-	c.fetcher.Close()
 }
 
-func (c *Crawler) start(target *wbot.ParsedURL) {
-	defer func() {
-		c.wg.Done()
-		atomic.AddInt32(&c.counter, 1)
-	}()
+func (c *Crawler) start(target *wbot.ParsedURL) error {
+	defer c.wg.Done()
 
 	param := &wbot.Param{
 		MaxBodySize: c.cfg.maxBodySize,
@@ -190,41 +191,35 @@ func (c *Crawler) start(target *wbot.ParsedURL) {
 	}
 
 	if err := c.queue.Push(context.TODO(), req); err != nil {
-		c.errors <- fmt.Errorf("push: %w", err)
-		return
+		return fmt.Errorf("push: %w", err)
 	}
 
+	fmt.Printf("Crawling %s\n", target.URL.String())
+
+	return nil
 }
-func (c *Crawler) crawler() {
+func (c *Crawler) crawler(id int) {
 	defer c.wg.Done()
 
 	for {
 		select {
 		case <-c.quit.Done():
-			c.termLog.Debugf("quit")
-			c.queue.Close() // must close queue before quit
+			fmt.Printf("worker %d is stopping\n", id)
 			return
 		default:
-			func() {
-				defer atomic.AddInt32(&c.counter, -1)
-			}()
+			if atomic.LoadInt32(&c.status) == crawlFinished {
+				c.quit.Cancel()
+				return
+			}
+
+			if c.queue.IsDone() {
+				c.quit.Cancel()
+				return
+			}
 
 			req, err := c.queue.Pop(context.TODO())
 			if err != nil {
-				// atomic.AddInt32(&c.counter, -1)
-				// c.termLog.Errorf("pop: %s", err.Error())
-				continue
-			}
-
-			if req.Depth > c.cfg.maxDepth {
-				// atomic.AddInt32(&c.counter, -1)
-
-				if c.queue.Len()+atomic.LoadInt32(&c.counter) == 0 {
-					c.quit.Cancel()
-					fmt.Println("queue len:", c.queue.Len())
-					continue
-				}
-
+				c.errors <- fmt.Errorf("pop: %w", err)
 				continue
 			}
 
@@ -232,8 +227,6 @@ func (c *Crawler) crawler() {
 
 			resp, err := c.fetcher.Fetch(context.TODO(), req)
 			if err != nil {
-				// todo: log
-				// atomic.AddInt32(&c.counter, -1)
 				c.errors <- fmt.Errorf("fetch: %w", err)
 				continue
 			}
@@ -241,7 +234,8 @@ func (c *Crawler) crawler() {
 			atomic.AddInt32(&req.Depth, 1)
 			for _, target := range resp.NextURLs {
 				if !strings.Contains(target.URL.Host, req.Target.Root) {
-					c.errors <- fmt.Errorf("hostname check: %w", err)
+					// can be ignored - better add log level
+					// c.errors <- fmt.Errorf("hostname check: %s", target.URL.String())
 					continue
 				}
 
@@ -251,16 +245,18 @@ func (c *Crawler) crawler() {
 				// }
 
 				if !c.filter.allow(target) {
-					c.errors <- fmt.Errorf("allow check: %w", err)
+					// can be ignored - better add log level
+					// c.errors <- fmt.Errorf("allow check: %s", target.URL.String())
 					continue
 				}
 
 				if visited, err := c.store.HasVisited(context.TODO(), target); visited {
 					if err != nil {
-						c.errors <- fmt.Errorf("has visited 1: %w", err)
+						c.errors <- fmt.Errorf("store: %w", err)
 						continue
 					}
-					c.errors <- fmt.Errorf("has visited 2: %w", err)
+					// can be ignored - better add log level
+					// c.errors <- fmt.Errorf("URL %s has been visited", target.URL.String())
 					continue
 				}
 
@@ -274,38 +270,26 @@ func (c *Crawler) crawler() {
 					c.errors <- fmt.Errorf("push: %w", err)
 					continue
 				}
-
-				atomic.AddInt32(&c.counter, 1)
 			}
 
-			// if c.log != nil {
-			// 	rep := newReport(resp, nil)
-			// 	c.log.Send(rep)
-			// }
-
-			// stream
-			c.stream <- resp
-			// atomic.AddInt32(&c.counter, -1)
-
-			c.termLog.Infof("crawled: %s, depth: %d, counter: %d, queue: %d", first64Chars(req.Target.URL.String()), req.Depth, c.counter, c.queue.Len())
-
-			if c.queue.Len()+atomic.LoadInt32(&c.counter) == 0 {
-				c.queue.Close() // must close queue before quit
+			if req.Depth > c.cfg.maxDepth {
+				c.queue.Cancel() // todo: better way to stop the queue
+				// c.quit.Cancel()
 				continue
 			}
+
+			c.stream <- resp
 		}
 	}
 }
-
-func first64Chars(s string) string {
-	if len(s) <= 64 {
-		return s
-	}
-
-	runes := []rune(s)
-	if len(runes) <= 64 {
-		return s
-	}
-
-	return string(runes[:64])
+func (c *Crawler) exit() {
+	c.once.Do(func() {
+		atomic.StoreInt32(&c.status, crawlFinished)
+		c.queue.Cancel()
+		c.queue.Close()
+		c.store.Close()
+		c.fetcher.Close()
+		close(c.stream)
+		close(c.errors)
+	})
 }

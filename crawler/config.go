@@ -41,29 +41,23 @@ func newConfig(maxDepth int32, userAgents, referrers, proxies []string) *config 
 
 	if len(userAgents) > 0 {
 		uaList := poxa.NewSpinner(userAgents...)
-		if uaList == nil {
-			// can be ignored.
+		if uaList != nil {
+			conf.userAgents = uaList
 		}
-
-		conf.userAgents = uaList
 	}
 
 	if len(referrers) > 0 {
 		refList := poxa.NewSpinner(referrers...)
-		if refList == nil {
-			// can be ignored.
+		if refList != nil {
+			conf.referrers = refList
 		}
-
-		conf.referrers = refList
 	}
 
 	if len(proxies) > 0 {
 		proxyList := poxa.NewSpinner(proxies...)
-		if proxyList == nil {
-			// can be ignored.
+		if proxyList != nil {
+			conf.proxies = proxyList
 		}
-
-		conf.proxies = proxyList
 	}
 
 	return conf

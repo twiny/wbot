@@ -32,6 +32,9 @@ func (s *defaultInMemoryStore) HasVisited(ctx context.Context, link *wbot.Parsed
 	return found, nil
 }
 func (s *defaultInMemoryStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	clear(s.table)
 	return nil
 }

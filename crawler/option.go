@@ -49,8 +49,3 @@ func WithStore(store wbot.Store) Option {
 		c.store = store
 	}
 }
-func WithLogger(logger wbot.Logger) Option {
-	return func(c *Crawler) {
-		c.logger = logger
-	}
-}

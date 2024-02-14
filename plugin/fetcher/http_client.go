@@ -1,11 +1,13 @@
 package fetcher
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/twiny/wbot"
@@ -13,47 +15,53 @@ import (
 
 type (
 	defaultHTTPClient struct {
-		client *http.Client
+		client     *http.Client
+		bufferPool *sync.Pool
 	}
 )
 
 func NewHTTPClient() wbot.Fetcher {
+	var (
+		fn = func() any {
+			return new(bytes.Buffer)
+		}
+	)
+
 	return &defaultHTTPClient{
 		client: &http.Client{
 			Jar:     http.DefaultClient.Jar,
 			Timeout: 10 * time.Second,
 		},
+		bufferPool: &sync.Pool{
+			New: fn,
+		},
 	}
 }
 
 func (f *defaultHTTPClient) Fetch(ctx context.Context, req *wbot.Request) (*wbot.Response, error) {
-	type (
-		fetchResult struct {
-			result *wbot.Response
-			err    error
-		}
+	var (
+		respCh   = make(chan *wbot.Response, 1)
+		fetchErr error
 	)
-
-	var ch = make(chan fetchResult, 1)
 
 	go func() {
 		resp, err := f.fetch(req)
 		if err != nil {
-			ch <- fetchResult{nil, err}
+			fetchErr = err
 			return
 		}
-		ch <- fetchResult{resp, nil}
+		respCh <- resp
 	}()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case resp := <-ch:
-			if resp.err != nil {
-				return nil, resp.err
+		case resp := <-respCh:
+			if fetchErr != nil {
+				return nil, fetchErr
 			}
-			return resp.result, nil
+			return resp, nil
 		}
 	}
 }
@@ -82,18 +90,20 @@ func (f *defaultHTTPClient) fetch(req *wbot.Request) (*wbot.Response, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
+
+	buf := f.bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer f.bufferPool.Put(buf)
 
 	// Limit response body reading
-	bodyReader := io.LimitReader(resp.Body, req.Param.MaxBodySize)
-
-	body, err := io.ReadAll(bodyReader)
-	if err != nil {
+	if _, err := io.CopyN(buf, resp.Body, req.Param.MaxBodySize); err != nil && err != io.EOF {
 		return nil, err
 	}
 
-	resp.Body.Close()
+	bytes := buf.Bytes()
 
-	links := wbot.FindLinks(body)
+	links := wbot.FindLinks(bytes)
 
 	var nextURLs []*wbot.ParsedURL
 	for _, link := range links {
@@ -111,7 +121,7 @@ func (f *defaultHTTPClient) fetch(req *wbot.Request) (*wbot.Response, error) {
 	return &wbot.Response{
 		URL:      req.Target,
 		Status:   resp.StatusCode,
-		Body:     body,
+		Body:     bytes,
 		NextURLs: nextURLs,
 		Depth:    req.Depth,
 	}, nil
