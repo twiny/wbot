@@ -14,7 +14,7 @@ import (
 	"github.com/twiny/flare"
 	"github.com/twiny/wbot"
 	"github.com/twiny/wbot/plugin/fetcher"
-	"github.com/twiny/wbot/plugin/monitor"
+	"github.com/twiny/wbot/plugin/metrics"
 	"github.com/twiny/wbot/plugin/queue"
 	"github.com/twiny/wbot/plugin/store"
 )
@@ -68,7 +68,7 @@ func New(opts ...Option) *Crawler {
 		fetcher: fetcher.NewHTTPClient(),
 		store:   store.NewInMemoryStore(),
 		queue:   queue.NewInMemoryQueue(2048),
-		metrics: monitor.NewmetricsMonitor(),
+		metrics: metrics.NewMetricsMonitor(),
 
 		filter:  newFilter(),
 		limiter: newRateLimiter(),
@@ -105,11 +105,12 @@ func New(opts ...Option) *Crawler {
 	return c
 }
 
-func (c *Crawler) Start(links ...string) error {
+func (c *Crawler) Run(links ...string) error {
 	var (
 		targets []*wbot.ParsedURL
 		errs    []error
 	)
+
 	for _, link := range links {
 		target, err := wbot.NewURL(link)
 		if err != nil {
@@ -128,7 +129,7 @@ func (c *Crawler) Start(links ...string) error {
 	}
 
 	for _, target := range targets {
-		c.start(target)
+		c.add(target)
 	}
 
 	c.status = crawlRunning
@@ -137,7 +138,7 @@ func (c *Crawler) Start(links ...string) error {
 
 	c.wg.Add(c.cfg.parallel)
 	for i := 0; i < c.cfg.parallel; i++ {
-		go c.crawler(i)
+		go c.crawl(i)
 	}
 
 	c.wg.Wait()
@@ -161,14 +162,14 @@ func (c *Crawler) OnReponse(fn func(*wbot.Response)) {
 		}
 	}()
 }
-func (c *Crawler) Stats() map[string]any {
-	return map[string]any{}
+func (c *Crawler) Metrics() map[string]int64 {
+	return c.metrics.Metrics()
 }
-func (c *Crawler) Stop() {
+func (c *Crawler) Shutdown() {
 	c.stop()
 }
 
-func (c *Crawler) start(target *wbot.ParsedURL) {
+func (c *Crawler) add(target *wbot.ParsedURL) {
 	param := &wbot.Param{
 		MaxBodySize: c.cfg.maxBodySize,
 		UserAgent:   c.cfg.userAgents.Next(),
@@ -190,7 +191,7 @@ func (c *Crawler) start(target *wbot.ParsedURL) {
 		return
 	}
 }
-func (c *Crawler) crawler(id int) {
+func (c *Crawler) crawl(id int) {
 	defer c.wg.Done()
 
 	for {
@@ -203,7 +204,7 @@ func (c *Crawler) crawler(id int) {
 				return
 			}
 
-			// not elegant, but if the queue is empty, we wait for a while
+			// not elegant, but just to give the queue some time to fill up
 			if atomic.LoadInt32(&c.status) == crawlRunning && c.queue.Len() == 0 {
 				<-time.After(1 * time.Second)
 				continue
@@ -214,6 +215,7 @@ func (c *Crawler) crawler(id int) {
 				c.logger.Err(err).Msgf("pop")
 				continue
 			}
+			c.metrics.IncTotalRequests()
 
 			// if the next response will exceed the max depth,
 			// we signal the crawler to stop
@@ -225,32 +227,40 @@ func (c *Crawler) crawler(id int) {
 
 			resp, err := c.fetcher.Fetch(c.ctx, req)
 			if err != nil {
+				c.metrics.IncFailedRequests()
 				c.logger.Err(err).Any("target", req.Target.String()).Msgf("fetch")
 				continue
 			}
 
-			c.logger.Debug().Msgf("Fetched: %s", resp.URL.String())
-
 			c.stream <- resp
+			c.metrics.IncSuccessfulRequests()
 
-			atomic.AddInt32(&req.Depth, 1)
+			c.logger.Debug().Any("target", req.Target.String()).Msgf("fetched")
 
-			if atomic.LoadInt32(&req.Depth) > c.cfg.maxDepth {
+			// increment the depth for the next requests
+			nextDepth := atomic.AddInt32(&req.Depth, 1)
+
+			if nextDepth > c.cfg.maxDepth {
 				continue
 			}
 
 			// logging here will just flood the logs
 			for _, target := range resp.NextURLs {
+				c.metrics.IncTotalLink()
+
 				if !strings.Contains(target.URL.Host, req.Target.Root) {
+					c.metrics.IncSkippedLink()
 					continue
 				}
 
-				// if !c.robot.Allowed(req.Param.UserAgent, req.URL.String()) {
-				// 	// todo: log
-				// 	continue
-				// }
+				if !c.robot.Allowed(req.Param.UserAgent, req.Target.URL.String()) {
+					c.metrics.IncSkippedLink()
+					// todo: log
+					continue
+				}
 
 				if !c.filter.allow(target) {
+					c.metrics.IncSkippedLink()
 					continue
 				}
 
@@ -258,6 +268,7 @@ func (c *Crawler) crawler(id int) {
 					if err != nil {
 						c.logger.Err(err).Msgf("store")
 					}
+					c.metrics.IncDuplicatedLink()
 					continue
 				}
 
@@ -271,6 +282,8 @@ func (c *Crawler) crawler(id int) {
 					c.logger.Err(err).Any("target", target.String()).Msgf("push")
 					continue
 				}
+
+				c.metrics.IncCrawledLink()
 			}
 		}
 	}

@@ -158,12 +158,12 @@ func newHTTPTransport(purl string) *http.Transport {
 			KeepAlive: 10 * time.Second,
 			DualStack: true,
 		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100, // Default: 100
-		MaxIdleConnsPerHost:   2,   // Default: 2
+		ForceAttemptHTTP2:     false,
+		MaxIdleConns:          10, // Default: 100
+		MaxIdleConnsPerHost:   5,  // Default: 2
 		IdleConnTimeout:       10 * time.Second,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		DisableKeepAlives:     false,
+		TLSHandshakeTimeout:   2 * time.Second,
+		ExpectContinueTimeout: 2 * time.Second,
+		DisableKeepAlives:     true,
 	}
 }

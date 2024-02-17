@@ -37,16 +37,13 @@ type (
 		IncTotalRequests()
 		IncSuccessfulRequests()
 		IncFailedRequests()
-		IncRetries()
-		IncRedirects()
 
-		IncTotalPages()
-		IncCrawledPages()
-		IncSkippedPages()
-		IncParsedLinks()
+		IncTotalLink()
+		IncCrawledLink()
+		IncSkippedLink()
+		IncDuplicatedLink()
 
-		IncClientErrors()
-		IncServerErrors()
+		Metrics() map[string]int64
 	}
 
 	Request struct {
