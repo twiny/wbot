@@ -2,24 +2,24 @@ package crawler
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/twiny/flare"
 	"github.com/twiny/wbot"
 	"github.com/twiny/wbot/plugin/fetcher"
 	"github.com/twiny/wbot/plugin/monitor"
 	"github.com/twiny/wbot/plugin/queue"
 	"github.com/twiny/wbot/plugin/store"
-
-	"github.com/twiny/flare"
 )
 
 const (
-	crawlInProgress int32 = iota
-	crawlFinished
+	crawlRunning = 0
+	crawlStopped = 1
 )
 
 type (
@@ -39,20 +39,23 @@ type (
 		stream chan *wbot.Response
 		errors chan error
 
-		once   *sync.Once
 		status int32
-		quit   flare.Notifier
+		flare  flare.Notifier
+
+		ctx  context.Context
+		stop context.CancelFunc
 	}
 )
 
 func New(opts ...Option) *Crawler {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	c := &Crawler{
 		wg:  new(sync.WaitGroup),
 		cfg: newConfig(-1, nil, nil, nil),
 
 		fetcher: fetcher.NewHTTPClient(),
 		store:   store.NewInMemoryStore(),
-		queue:   queue.NewInMemoryQueue(),
+		queue:   queue.NewInMemoryQueue(2048),
 		metrics: monitor.NewmetricsMonitor(),
 
 		filter:  newFilter(),
@@ -62,9 +65,11 @@ func New(opts ...Option) *Crawler {
 		stream: make(chan *wbot.Response, 1024),
 		errors: make(chan error, 1024),
 
-		once:   new(sync.Once),
-		status: crawlFinished,
-		quit:   flare.New(),
+		status: crawlStopped,
+		flare:  flare.New(),
+
+		ctx:  ctx,
+		stop: stop,
 	}
 
 	for _, opt := range opts {
@@ -73,16 +78,18 @@ func New(opts ...Option) *Crawler {
 
 	// this routine waits for quit signal
 	go func() {
-		<-c.quit.Done()
+		<-c.ctx.Done()
 		fmt.Println("Crawler is shutting down")
-		atomic.StoreInt32(&c.status, crawlFinished)
 
-		close(c.stream)
-		close(c.errors)
-		c.wg.Wait()
+		c.flare.Cancel()
+
 		c.queue.Close()
 		c.store.Close()
 		c.fetcher.Close()
+
+		c.wg.Wait()
+		close(c.stream)
+		close(c.errors)
 	}()
 
 	return c
@@ -103,34 +110,25 @@ func (c *Crawler) Start(links ...string) error {
 	}
 
 	if len(errs) > 0 {
-		c.quit.Cancel()
-		return fmt.Errorf("invalid targets: %v", errors.Join(errs...))
+		return fmt.Errorf("invalid links: %v", errs)
 	}
 
 	if len(targets) == 0 {
-		c.quit.Cancel()
-		return fmt.Errorf("no valid targets: %v", errs)
+		return fmt.Errorf("no valid links")
 	}
 
-	atomic.StoreInt32(&c.status, crawlInProgress)
 	for _, target := range targets {
-		c.wg.Add(1)
-		go func(t *wbot.ParsedURL) {
-			if err := c.start(t); err != nil {
-				c.errors <- fmt.Errorf("start: %w", err)
-			}
-		}(target)
+		c.start(target)
 	}
 
+	c.status = crawlRunning
+
+	c.wg.Add(c.cfg.parallel)
 	for i := 0; i < c.cfg.parallel; i++ {
-		c.wg.Add(1)
 		go c.crawler(i)
 	}
 
-	fmt.Println("Crawler is running")
 	c.wg.Wait()
-	fmt.Println("Crawler has stopped")
-
 	return nil
 }
 func (c *Crawler) OnReponse(fn func(*wbot.Response)) {
@@ -139,7 +137,9 @@ func (c *Crawler) OnReponse(fn func(*wbot.Response)) {
 		defer c.wg.Done()
 		for {
 			select {
-			case <-c.quit.Done():
+			case <-c.ctx.Done():
+				return
+			case <-c.flare.Done():
 				return
 			case resp, ok := <-c.stream:
 				if ok {
@@ -155,7 +155,9 @@ func (c *Crawler) OnError(fn func(err error)) {
 		defer c.wg.Done()
 		for {
 			select {
-			case <-c.quit.Done():
+			case <-c.ctx.Done():
+				return
+			case <-c.flare.Done():
 				return
 			case err, ok := <-c.errors:
 				if ok {
@@ -169,15 +171,14 @@ func (c *Crawler) Stats() map[string]any {
 	return map[string]any{}
 }
 func (c *Crawler) Stop() {
-	c.quit.Cancel()
+	c.stop()
 }
 
-func (c *Crawler) start(target *wbot.ParsedURL) error {
-	defer c.wg.Done()
-
+func (c *Crawler) start(target *wbot.ParsedURL) {
 	param := &wbot.Param{
 		MaxBodySize: c.cfg.maxBodySize,
 		UserAgent:   c.cfg.userAgents.Next(),
+		Timeout:     c.cfg.timeout,
 	}
 
 	if c.cfg.proxies != nil {
@@ -190,48 +191,52 @@ func (c *Crawler) start(target *wbot.ParsedURL) error {
 		Depth:  0,
 	}
 
-	if err := c.queue.Push(context.TODO(), req); err != nil {
-		return fmt.Errorf("push: %w", err)
+	if err := c.queue.Push(c.ctx, req); err != nil {
+		c.errors <- fmt.Errorf("push: %w", err)
+		return
 	}
-
-	fmt.Printf("Crawling %s\n", target.URL.String())
-
-	return nil
 }
 func (c *Crawler) crawler(id int) {
 	defer c.wg.Done()
 
 	for {
 		select {
-		case <-c.quit.Done():
-			fmt.Printf("worker %d is stopping\n", id)
+		case <-c.ctx.Done():
 			return
 		default:
-			if atomic.LoadInt32(&c.status) == crawlFinished {
-				c.quit.Cancel()
+			if atomic.LoadInt32(&c.status) == crawlStopped && c.queue.Len() == 0 {
+				c.flare.Cancel()
 				return
 			}
 
-			if c.queue.IsDone() {
-				c.quit.Cancel()
-				return
-			}
-
-			req, err := c.queue.Pop(context.TODO())
+			req, err := c.queue.Pop(c.ctx)
 			if err != nil {
 				c.errors <- fmt.Errorf("pop: %w", err)
 				continue
 			}
 
+			// if the next response will exceed the max depth,
+			// we signal the crawler to stop
+			if atomic.LoadInt32(&req.Depth) > c.cfg.maxDepth-1 {
+				atomic.StoreInt32(&c.status, crawlStopped)
+			}
+
 			c.limiter.wait(req.Target)
 
-			resp, err := c.fetcher.Fetch(context.TODO(), req)
+			resp, err := c.fetcher.Fetch(c.ctx, req)
 			if err != nil {
 				c.errors <- fmt.Errorf("fetch: %w", err)
 				continue
 			}
 
+			c.stream <- resp
+
 			atomic.AddInt32(&req.Depth, 1)
+
+			if atomic.LoadInt32(&req.Depth) > c.cfg.maxDepth {
+				continue
+			}
+
 			for _, target := range resp.NextURLs {
 				if !strings.Contains(target.URL.Host, req.Target.Root) {
 					// can be ignored - better add log level
@@ -250,7 +255,7 @@ func (c *Crawler) crawler(id int) {
 					continue
 				}
 
-				if visited, err := c.store.HasVisited(context.TODO(), target); visited {
+				if visited, err := c.store.HasVisited(c.ctx, target); visited {
 					if err != nil {
 						c.errors <- fmt.Errorf("store: %w", err)
 						continue
@@ -266,30 +271,11 @@ func (c *Crawler) crawler(id int) {
 					Param:  req.Param,
 				}
 
-				if err := c.queue.Push(context.TODO(), nextReq); err != nil {
+				if err := c.queue.Push(c.ctx, nextReq); err != nil {
 					c.errors <- fmt.Errorf("push: %w", err)
 					continue
 				}
 			}
-
-			if req.Depth > c.cfg.maxDepth {
-				c.queue.Cancel() // todo: better way to stop the queue
-				// c.quit.Cancel()
-				continue
-			}
-
-			c.stream <- resp
 		}
 	}
-}
-func (c *Crawler) exit() {
-	c.once.Do(func() {
-		atomic.StoreInt32(&c.status, crawlFinished)
-		c.queue.Cancel()
-		c.queue.Close()
-		c.store.Close()
-		c.fetcher.Close()
-		close(c.stream)
-		close(c.errors)
-	})
 }

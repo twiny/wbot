@@ -19,6 +19,7 @@ type (
 		parallel    int
 		maxDepth    int32
 		maxBodySize int64
+		timeout     time.Duration
 		userAgents  poxa.Spinner[string]
 		referrers   poxa.Spinner[string]
 		proxies     poxa.Spinner[string]
@@ -34,6 +35,7 @@ func newConfig(maxDepth int32, userAgents, referrers, proxies []string) *config 
 		parallel:    runtime.NumCPU(),
 		maxDepth:    maxDepth,
 		maxBodySize: defaultMaxBodySize,
+		timeout:     defaultTimeout,
 		userAgents:  poxa.NewSpinner(defaultUserAgent),
 		referrers:   poxa.NewSpinner(defaultReferrer),
 		proxies:     nil,

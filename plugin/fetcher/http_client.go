@@ -31,6 +31,20 @@ func NewHTTPClient() wbot.Fetcher {
 		client: &http.Client{
 			Jar:     http.DefaultClient.Jar,
 			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout:   10 * time.Second,
+					KeepAlive: 10 * time.Second,
+					DualStack: true,
+				}).DialContext,
+				ForceAttemptHTTP2:     true,
+				MaxIdleConns:          100, // Default: 100
+				MaxIdleConnsPerHost:   2,   // Default: 2
+				IdleConnTimeout:       10 * time.Second,
+				TLSHandshakeTimeout:   5 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+				// DisableKeepAlives:     true,
+			},
 		},
 		bufferPool: &sync.Pool{
 			New: fn,
@@ -44,6 +58,9 @@ func (f *defaultHTTPClient) Fetch(ctx context.Context, req *wbot.Request) (*wbot
 		fetchErr error
 	)
 
+	fctx, done := context.WithTimeout(ctx, req.Param.Timeout)
+	defer done()
+
 	go func() {
 		resp, err := f.fetch(req)
 		if err != nil {
@@ -55,8 +72,8 @@ func (f *defaultHTTPClient) Fetch(ctx context.Context, req *wbot.Request) (*wbot
 
 	for {
 		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		case <-fctx.Done():
+			return nil, fctx.Err()
 		case resp := <-respCh:
 			if fetchErr != nil {
 				return nil, fetchErr
@@ -147,6 +164,6 @@ func newHTTPTransport(purl string) *http.Transport {
 		IdleConnTimeout:       10 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		// DisableKeepAlives:     true,
+		DisableKeepAlives:     false,
 	}
 }

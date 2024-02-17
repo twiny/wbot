@@ -30,8 +30,6 @@ type (
 		Push(ctx context.Context, req *Request) error
 		Pop(ctx context.Context) (*Request, error)
 		Len() int32
-		Cancel()
-		IsDone() bool
 		Close() error
 	}
 
@@ -78,6 +76,7 @@ type (
 		UserAgent   string
 		Referer     string
 		MaxBodySize int64
+		Timeout     time.Duration
 	}
 
 	FilterRule struct {
