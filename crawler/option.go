@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"github.com/rs/zerolog"
 	"github.com/twiny/poxa"
 	"github.com/twiny/wbot"
 )
@@ -47,5 +48,15 @@ func WithFetcher(fetcher wbot.Fetcher) Option {
 func WithStore(store wbot.Store) Option {
 	return func(c *Crawler) {
 		c.store = store
+	}
+}
+func WithQueue(queue wbot.Queue) Option {
+	return func(c *Crawler) {
+		c.queue = queue
+	}
+}
+func WithLogLevel(level zerolog.Level) Option {
+	return func(c *Crawler) {
+		c.logger = c.logger.Level(level)
 	}
 }

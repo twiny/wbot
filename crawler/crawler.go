@@ -8,7 +8,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/twiny/flare"
 	"github.com/twiny/wbot"
 	"github.com/twiny/wbot/plugin/fetcher"
@@ -37,10 +39,11 @@ type (
 		robot   *robotManager
 
 		stream chan *wbot.Response
-		errors chan error
 
 		status int32
 		flare  flare.Notifier
+
+		logger zerolog.Logger
 
 		ctx  context.Context
 		stop context.CancelFunc
@@ -48,6 +51,15 @@ type (
 )
 
 func New(opts ...Option) *Crawler {
+	cw := zerolog.ConsoleWriter{
+		Out:        os.Stdout,
+		TimeFormat: time.RFC3339,
+		NoColor:    false,
+	}
+	zerolog.SetGlobalLevel(zerolog.TraceLevel)
+
+	logger := zerolog.New(cw).With().Timestamp().Logger()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	c := &Crawler{
 		wg:  new(sync.WaitGroup),
@@ -63,10 +75,10 @@ func New(opts ...Option) *Crawler {
 		robot:   newRobotManager(false),
 
 		stream: make(chan *wbot.Response, 1024),
-		errors: make(chan error, 1024),
 
 		status: crawlStopped,
 		flare:  flare.New(),
+		logger: logger,
 
 		ctx:  ctx,
 		stop: stop,
@@ -79,17 +91,15 @@ func New(opts ...Option) *Crawler {
 	// this routine waits for quit signal
 	go func() {
 		<-c.ctx.Done()
-		fmt.Println("Crawler is shutting down")
+		c.logger.Info().Msgf("Crawler is shutting down")
 
 		c.flare.Cancel()
-
 		c.queue.Close()
 		c.store.Close()
 		c.fetcher.Close()
 
 		c.wg.Wait()
 		close(c.stream)
-		close(c.errors)
 	}()
 
 	return c
@@ -123,6 +133,8 @@ func (c *Crawler) Start(links ...string) error {
 
 	c.status = crawlRunning
 
+	c.logger.Info().Msgf("Starting crawler with %d links", len(targets))
+
 	c.wg.Add(c.cfg.parallel)
 	for i := 0; i < c.cfg.parallel; i++ {
 		go c.crawler(i)
@@ -144,24 +156,6 @@ func (c *Crawler) OnReponse(fn func(*wbot.Response)) {
 			case resp, ok := <-c.stream:
 				if ok {
 					fn(resp)
-				}
-			}
-		}
-	}()
-}
-func (c *Crawler) OnError(fn func(err error)) {
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		for {
-			select {
-			case <-c.ctx.Done():
-				return
-			case <-c.flare.Done():
-				return
-			case err, ok := <-c.errors:
-				if ok {
-					fn(err)
 				}
 			}
 		}
@@ -192,7 +186,7 @@ func (c *Crawler) start(target *wbot.ParsedURL) {
 	}
 
 	if err := c.queue.Push(c.ctx, req); err != nil {
-		c.errors <- fmt.Errorf("push: %w", err)
+		c.logger.Err(err).Msgf("pop")
 		return
 	}
 }
@@ -209,9 +203,15 @@ func (c *Crawler) crawler(id int) {
 				return
 			}
 
+			// not elegant, but if the queue is empty, we wait for a while
+			if atomic.LoadInt32(&c.status) == crawlRunning && c.queue.Len() == 0 {
+				<-time.After(1 * time.Second)
+				continue
+			}
+
 			req, err := c.queue.Pop(c.ctx)
 			if err != nil {
-				c.errors <- fmt.Errorf("pop: %w", err)
+				c.logger.Err(err).Msgf("pop")
 				continue
 			}
 
@@ -225,9 +225,11 @@ func (c *Crawler) crawler(id int) {
 
 			resp, err := c.fetcher.Fetch(c.ctx, req)
 			if err != nil {
-				c.errors <- fmt.Errorf("fetch: %w", err)
+				c.logger.Err(err).Any("target", req.Target.String()).Msgf("fetch")
 				continue
 			}
+
+			c.logger.Debug().Msgf("Fetched: %s", resp.URL.String())
 
 			c.stream <- resp
 
@@ -237,10 +239,9 @@ func (c *Crawler) crawler(id int) {
 				continue
 			}
 
+			// logging here will just flood the logs
 			for _, target := range resp.NextURLs {
 				if !strings.Contains(target.URL.Host, req.Target.Root) {
-					// can be ignored - better add log level
-					// c.errors <- fmt.Errorf("hostname check: %s", target.URL.String())
 					continue
 				}
 
@@ -250,18 +251,13 @@ func (c *Crawler) crawler(id int) {
 				// }
 
 				if !c.filter.allow(target) {
-					// can be ignored - better add log level
-					// c.errors <- fmt.Errorf("allow check: %s", target.URL.String())
 					continue
 				}
 
 				if visited, err := c.store.HasVisited(c.ctx, target); visited {
 					if err != nil {
-						c.errors <- fmt.Errorf("store: %w", err)
-						continue
+						c.logger.Err(err).Msgf("store")
 					}
-					// can be ignored - better add log level
-					// c.errors <- fmt.Errorf("URL %s has been visited", target.URL.String())
 					continue
 				}
 
@@ -272,7 +268,7 @@ func (c *Crawler) crawler(id int) {
 				}
 
 				if err := c.queue.Push(c.ctx, nextReq); err != nil {
-					c.errors <- fmt.Errorf("push: %w", err)
+					c.logger.Err(err).Any("target", target.String()).Msgf("push")
 					continue
 				}
 			}
