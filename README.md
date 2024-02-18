@@ -14,10 +14,10 @@ A configurable, thread-safe web crawler, provides a minimal interface for crawli
 WBot provides a minimal API for crawling web pages.
 
 ```go
-Run(links ...string) error
-OnReponse(fn func(*wbot.Response))
-Metrics() map[string]int64
-Shutdown()
+ Run(links ...string) error
+ OnReponse(fn func(*wbot.Response))
+ Metrics() map[string]int64
+ Shutdown()
 ```
 
 ## Usage
@@ -30,37 +30,41 @@ import (
  "log"
 
  "github.com/rs/zerolog"
+
  "github.com/twiny/wbot"
- "github.com/twiny/wbot/crawler"
+ "github.com/twiny/wbot/pkg/api"
 )
 
 func main() {
- bot := crawler.New(
-  crawler.WithParallel(50),
-  crawler.WithMaxDepth(5),
-  crawler.WithRateLimit(&wbot.RateLimit{
+ bot := wbot.New(
+  wbot.WithParallel(50),
+  wbot.WithMaxDepth(5),
+  wbot.WithRateLimit(&api.RateLimit{
    Hostname: "*",
    Rate:     "10/1s",
   }),
-  crawler.WithLogLevel(zerolog.DebugLevel),
+  wbot.WithLogLevel(zerolog.DebugLevel),
  )
  defer bot.Shutdown()
 
  // read responses
- bot.OnReponse(func(resp *wbot.Response) {
+ bot.OnReponse(func(resp *api.Response) {
   fmt.Printf("crawled: %s\n", resp.URL.String())
  })
 
  if err := bot.Run(
-  "https://crawler-test.com/",
+  "https://go.dev/",
  ); err != nil {
   log.Fatal(err)
  }
 
  log.Printf("finished crawling\n")
 }
-
 ```
+
+### Wiki
+
+More documentation can be found in the [wiki](https://github.com/twiny/wbot/wiki).
 
 ### Bugs
 

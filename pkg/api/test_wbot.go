@@ -1,4 +1,4 @@
-package wbot
+package api
 
 import "testing"
 

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/twiny/wbot"
+	"github.com/twiny/wbot/pkg/api"
 )
 
 /*
@@ -14,19 +14,19 @@ if request depth is exceeded return
 */
 type defaultInMemoryQueue struct {
 	mu   *sync.RWMutex
-	list []*wbot.Request
+	list []*api.Request
 }
 
-func NewInMemoryQueue(size int) wbot.Queue {
+func NewInMemoryQueue(size int) api.Queue {
 	q := &defaultInMemoryQueue{
 		mu:   new(sync.RWMutex),
-		list: make([]*wbot.Request, 0, size),
+		list: make([]*api.Request, 0, size),
 	}
 
 	return q
 }
 
-func (q *defaultInMemoryQueue) Push(ctx context.Context, req *wbot.Request) error {
+func (q *defaultInMemoryQueue) Push(ctx context.Context, req *api.Request) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -34,7 +34,7 @@ func (q *defaultInMemoryQueue) Push(ctx context.Context, req *wbot.Request) erro
 
 	return nil
 }
-func (q *defaultInMemoryQueue) Pop(ctx context.Context) (*wbot.Request, error) {
+func (q *defaultInMemoryQueue) Pop(ctx context.Context) (*api.Request, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 

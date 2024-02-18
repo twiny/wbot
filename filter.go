@@ -1,9 +1,9 @@
-package crawler
+package wbot
 
 import (
 	"regexp"
 
-	"github.com/twiny/wbot"
+	"github.com/twiny/wbot/pkg/api"
 )
 
 var (
@@ -12,13 +12,13 @@ var (
 
 type (
 	filter struct {
-		rules map[string]*wbot.FilterRule
+		rules map[string]*api.FilterRule
 	}
 )
 
-func newFilter(rules ...*wbot.FilterRule) *filter {
+func newFilter(rules ...*api.FilterRule) *filter {
 	f := &filter{
-		rules: make(map[string]*wbot.FilterRule),
+		rules: make(map[string]*api.FilterRule),
 	}
 
 	for _, rule := range rules {
@@ -27,7 +27,7 @@ func newFilter(rules ...*wbot.FilterRule) *filter {
 
 	return f
 }
-func (f *filter) allow(u *wbot.ParsedURL) bool {
+func (f *filter) allow(u *api.ParsedURL) bool {
 	if badExtensions.MatchString(u.URL.Path) {
 		return false
 	}

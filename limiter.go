@@ -1,4 +1,4 @@
-package crawler
+package wbot
 
 import (
 	"strconv"
@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/twiny/ratelimit"
-	"github.com/twiny/wbot"
+	"github.com/twiny/wbot/pkg/api"
 )
 
 var (
@@ -19,7 +19,7 @@ type (
 	}
 )
 
-func newRateLimiter(limits ...*wbot.RateLimit) *rateLimiter {
+func newRateLimiter(limits ...*api.RateLimit) *rateLimiter {
 	rl := &rateLimiter{
 		table: make(map[string]*ratelimit.Limiter),
 	}
@@ -36,7 +36,7 @@ func newRateLimiter(limits ...*wbot.RateLimit) *rateLimiter {
 	}
 
 	if !hasWildcard {
-		limits = append(limits, &wbot.RateLimit{
+		limits = append(limits, &api.RateLimit{
 			Hostname: "*",
 			Rate:     defaultRateLimit,
 		})
@@ -49,7 +49,7 @@ func newRateLimiter(limits ...*wbot.RateLimit) *rateLimiter {
 
 	return rl
 }
-func (l *rateLimiter) wait(u *wbot.ParsedURL) {
+func (l *rateLimiter) wait(u *api.ParsedURL) {
 	limit, found := l.table[u.Root]
 	if !found {
 		limit = l.table["*"]

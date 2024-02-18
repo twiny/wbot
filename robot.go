@@ -1,4 +1,4 @@
-package crawler
+package wbot
 
 import (
 	"github.com/temoto/robotstxt"

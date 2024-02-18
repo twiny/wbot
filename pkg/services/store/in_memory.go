@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/twiny/wbot"
+	"github.com/twiny/wbot/pkg/api"
 )
 
 type (
@@ -14,12 +14,12 @@ type (
 	}
 )
 
-func NewInMemoryStore() wbot.Store {
+func NewInMemoryStore() api.Store {
 	return &defaultInMemoryStore{
 		table: make(map[string]bool),
 	}
 }
-func (s *defaultInMemoryStore) HasVisited(ctx context.Context, link *wbot.ParsedURL) (bool, error) {
+func (s *defaultInMemoryStore) HasVisited(ctx context.Context, link *api.ParsedURL) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
