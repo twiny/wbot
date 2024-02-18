@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/twiny/wbot"
+	"github.com/twiny/wbot/pkg/api"
 )
 
 type (
@@ -20,7 +20,7 @@ type (
 	}
 )
 
-func NewHTTPClient() wbot.Fetcher {
+func NewHTTPClient() api.Fetcher {
 	var (
 		fn = func() any {
 			return new(bytes.Buffer)
@@ -52,9 +52,9 @@ func NewHTTPClient() wbot.Fetcher {
 	}
 }
 
-func (f *defaultHTTPClient) Fetch(ctx context.Context, req *wbot.Request) (*wbot.Response, error) {
+func (f *defaultHTTPClient) Fetch(ctx context.Context, req *api.Request) (*api.Response, error) {
 	var (
-		respCh   = make(chan *wbot.Response, 1)
+		respCh   = make(chan *api.Response, 1)
 		fetchErr error
 	)
 
@@ -87,7 +87,7 @@ func (f *defaultHTTPClient) Close() error {
 	return nil
 }
 
-func (f *defaultHTTPClient) fetch(req *wbot.Request) (*wbot.Response, error) {
+func (f *defaultHTTPClient) fetch(req *api.Request) (*api.Response, error) {
 	var header = make(http.Header)
 	header.Set("User-Agent", req.Param.UserAgent)
 	header.Set("Referer", req.Param.Referer)
@@ -120,22 +120,22 @@ func (f *defaultHTTPClient) fetch(req *wbot.Request) (*wbot.Response, error) {
 
 	bytes := buf.Bytes()
 
-	links := wbot.FindLinks(bytes)
+	links := api.FindLinks(bytes)
 
-	var nextURLs []*wbot.ParsedURL
+	var nextURLs []*api.ParsedURL
 	for _, link := range links {
 		absURL, err := req.ResolveURL(link)
 		if err != nil {
 			continue
 		}
-		parsedURL, err := wbot.NewURL(absURL.String())
+		parsedURL, err := api.NewURL(absURL.String())
 		if err != nil {
 			continue
 		}
 		nextURLs = append(nextURLs, parsedURL)
 	}
 
-	return &wbot.Response{
+	return &api.Response{
 		URL:      req.Target,
 		Status:   resp.StatusCode,
 		Body:     bytes,

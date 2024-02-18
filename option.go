@@ -1,9 +1,10 @@
-package crawler
+package wbot
 
 import (
 	"github.com/rs/zerolog"
 	"github.com/twiny/poxa"
-	"github.com/twiny/wbot"
+
+	"github.com/twiny/wbot/pkg/api"
 )
 
 type (
@@ -30,27 +31,27 @@ func WithProxies(proxies []string) Option {
 		c.cfg.proxies = poxa.NewSpinner(proxies...)
 	}
 }
-func WithRateLimit(rates ...*wbot.RateLimit) Option {
+func WithRateLimit(rates ...*api.RateLimit) Option {
 	return func(c *Crawler) {
 		c.limiter = newRateLimiter(rates...)
 	}
 }
-func WithFilter(rules ...*wbot.FilterRule) Option {
+func WithFilter(rules ...*api.FilterRule) Option {
 	return func(c *Crawler) {
 		c.filter = newFilter(rules...)
 	}
 }
-func WithFetcher(fetcher wbot.Fetcher) Option {
+func WithFetcher(fetcher api.Fetcher) Option {
 	return func(c *Crawler) {
 		c.fetcher = fetcher
 	}
 }
-func WithStore(store wbot.Store) Option {
+func WithStore(store api.Store) Option {
 	return func(c *Crawler) {
 		c.store = store
 	}
 }
-func WithQueue(queue wbot.Queue) Option {
+func WithQueue(queue api.Queue) Option {
 	return func(c *Crawler) {
 		c.queue = queue
 	}

@@ -1,19 +1,38 @@
-package wbot
+package api
 
 import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/weppos/publicsuffix-go/publicsuffix"
 )
+
+var (
+	//go:embed tlds.json
+	tldsBytes []byte
+	tlds      = map[string]bool{}
+	once      = &sync.Once{}
+)
+
+func init() {
+	once.Do(func() {
+		tlds = make(map[string]bool)
+		if err := json.Unmarshal(tldsBytes, &tlds); err != nil {
+			return
+		}
+	})
+}
 
 type (
 	Fetcher interface {
@@ -110,6 +129,39 @@ func (u *ParsedURL) String() string {
 	return link
 }
 
+func NewURL(raw string) (*ParsedURL, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("invalid scheme: %s", u.Scheme)
+	}
+
+	// Extract domain and TLD using publicsuffix-go
+	domain, err := publicsuffix.Domain(u.Hostname())
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract domain: %w", err)
+	}
+
+	// Ensure that the extracted TLD is in our allowed list
+	tld := domain[strings.LastIndex(domain, ".")+1:]
+	if !tlds[tld] {
+		return nil, fmt.Errorf("invalid TLD: %s", tld)
+	}
+
+	hash, err := hashLink(*u)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hash: %s", hash)
+	}
+
+	return &ParsedURL{
+		Hash: hash,
+		Root: domain,
+		URL:  u,
+	}, nil
+}
 func FindLinks(body []byte) (hrefs []string) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {
@@ -143,39 +195,25 @@ func FindLinks(body []byte) (hrefs []string) {
 	})
 	return hrefs
 }
-
-func NewURL(raw string) (*ParsedURL, error) {
-	u, err := url.Parse(raw)
+func Hostname(link string) (string, error) {
+	u, err := url.Parse(link)
 	if err != nil {
-		return nil, err
-	}
-
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("invalid scheme: %s", u.Scheme)
+		return "", fmt.Errorf("failed to parse URL: %w", err)
 	}
 
 	// Extract domain and TLD using publicsuffix-go
 	domain, err := publicsuffix.Domain(u.Hostname())
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract domain: %w", err)
+		return "", fmt.Errorf("failed to extract domain: %w", err)
 	}
 
 	// Ensure that the extracted TLD is in our allowed list
 	tld := domain[strings.LastIndex(domain, ".")+1:]
 	if !tlds[tld] {
-		return nil, fmt.Errorf("invalid TLD: %s", tld)
+		return "", fmt.Errorf("invalid TLD: %s", tld)
 	}
 
-	hash, err := hashLink(*u)
-	if err != nil {
-		return nil, fmt.Errorf("invalid hash: %s", hash)
-	}
-
-	return &ParsedURL{
-		Hash: hash,
-		Root: domain,
-		URL:  u,
-	}, nil
+	return domain, nil
 }
 
 func hashLink(parsedLink url.URL) (string, error) {

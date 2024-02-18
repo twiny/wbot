@@ -1,4 +1,4 @@
-package crawler
+package wbot
 
 import (
 	"context"
@@ -11,12 +11,13 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
 	"github.com/twiny/flare"
-	"github.com/twiny/wbot"
-	"github.com/twiny/wbot/plugin/fetcher"
-	"github.com/twiny/wbot/plugin/metrics"
-	"github.com/twiny/wbot/plugin/queue"
-	"github.com/twiny/wbot/plugin/store"
+	"github.com/twiny/wbot/pkg/api"
+	"github.com/twiny/wbot/pkg/services/fetcher"
+	"github.com/twiny/wbot/pkg/services/metrics"
+	"github.com/twiny/wbot/pkg/services/queue"
+	"github.com/twiny/wbot/pkg/services/store"
 )
 
 const (
@@ -29,16 +30,16 @@ type (
 		wg  *sync.WaitGroup
 		cfg *config
 
-		fetcher wbot.Fetcher
-		store   wbot.Store
-		queue   wbot.Queue
-		metrics wbot.MetricsMonitor
+		fetcher api.Fetcher
+		store   api.Store
+		queue   api.Queue
+		metrics api.MetricsMonitor
 
 		filter  *filter
 		limiter *rateLimiter
 		robot   *robotManager
 
-		stream chan *wbot.Response
+		stream chan *api.Response
 
 		status int32
 		flare  flare.Notifier
@@ -74,7 +75,7 @@ func New(opts ...Option) *Crawler {
 		limiter: newRateLimiter(),
 		robot:   newRobotManager(false),
 
-		stream: make(chan *wbot.Response, 1024),
+		stream: make(chan *api.Response, 1024),
 
 		status: crawlStopped,
 		flare:  flare.New(),
@@ -107,12 +108,12 @@ func New(opts ...Option) *Crawler {
 
 func (c *Crawler) Run(links ...string) error {
 	var (
-		targets []*wbot.ParsedURL
+		targets []*api.ParsedURL
 		errs    []error
 	)
 
 	for _, link := range links {
-		target, err := wbot.NewURL(link)
+		target, err := api.NewURL(link)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -144,7 +145,7 @@ func (c *Crawler) Run(links ...string) error {
 	c.wg.Wait()
 	return nil
 }
-func (c *Crawler) OnReponse(fn func(*wbot.Response)) {
+func (c *Crawler) OnReponse(fn func(*api.Response)) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
@@ -169,8 +170,8 @@ func (c *Crawler) Shutdown() {
 	c.stop()
 }
 
-func (c *Crawler) add(target *wbot.ParsedURL) {
-	param := &wbot.Param{
+func (c *Crawler) add(target *api.ParsedURL) {
+	param := &api.Param{
 		MaxBodySize: c.cfg.maxBodySize,
 		UserAgent:   c.cfg.userAgents.Next(),
 		Timeout:     c.cfg.timeout,
@@ -180,7 +181,7 @@ func (c *Crawler) add(target *wbot.ParsedURL) {
 		param.Proxy = c.cfg.proxies.Next()
 	}
 
-	req := &wbot.Request{
+	req := &api.Request{
 		Target: target,
 		Param:  param,
 		Depth:  0,
@@ -272,7 +273,7 @@ func (c *Crawler) crawl(id int) {
 					continue
 				}
 
-				nextReq := &wbot.Request{
+				nextReq := &api.Request{
 					Target: target,
 					Depth:  req.Depth,
 					Param:  req.Param,
