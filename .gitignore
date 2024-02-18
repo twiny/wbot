@@ -1,4 +1,5 @@
-cmd/tests
-makefile
-logs
-tmp
+bin/
+tests/
+.idea.md
+*.*prof
+.vscode/

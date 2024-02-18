@@ -1,252 +1,200 @@
 package wbot
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
-	"runtime"
+	"net/url"
+	"regexp"
 	"strings"
-	"sync"
-	"sync/atomic"
+	"time"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/weppos/publicsuffix-go/publicsuffix"
 )
 
-// default cpu core
-var cores = func() int {
-	c := runtime.NumCPU()
-	if c == 1 {
-		return c
-	}
-	return c - 1
-}()
-
-// WBot
-type WBot struct {
-	wg      *sync.WaitGroup
-	conf    *config
-	limit   *limiter
-	filter  *filter
-	fetcher Fetcher
-	queue   Queue
-	store   Store
-	log     Logger
-	stream  chan Response
-}
-
-// NewWBot
-func NewWBot(opts ...Option) *WBot {
-	conf := &config{
-		maxDepth:    10,
-		parallel:    cores,
-		maxBodySize: 1024 * 1024 * 10,
-		userAgents:  newRotator([]string{}),
-		proxies:     newRotator([]string{}),
+type (
+	Fetcher interface {
+		Fetch(ctx context.Context, req *Request) (*Response, error)
+		Close() error
 	}
 
-	wbot := &WBot{
-		wg:      &sync.WaitGroup{},
-		conf:    conf,
-		fetcher: defaultFetcher(),
-		limit:   newLimiter(1, 1),
-		filter:  newFilter([]string{}, []string{}),
-		store:   defaultStore[string](),
-		queue:   defaultQueue[Request](),
-		log:     nil,
-		stream:  make(chan Response, cores),
+	Store interface {
+		HasVisited(ctx context.Context, u *ParsedURL) (bool, error)
+		Close() error
 	}
 
-	// options
-	wbot.SetOptions(opts...)
-
-	return wbot
-}
-
-// Crawl
-func (wb *WBot) Crawl(link string) error {
-	// first request
-	p := Param{
-		Referer:     link,
-		MaxBodySize: wb.conf.maxBodySize,
-		UserAgent:   wb.conf.userAgents.next(),
-		Proxy:       wb.conf.proxies.next(),
+	Queue interface {
+		Push(ctx context.Context, req *Request) error
+		Pop(ctx context.Context) (*Request, error)
+		Len() int32
+		Close() error
 	}
 
-	req, err := newRequest(link, 0, p)
+	MetricsMonitor interface {
+		IncTotalRequests()
+		IncSuccessfulRequests()
+		IncFailedRequests()
+
+		IncTotalLink()
+		IncCrawledLink()
+		IncSkippedLink()
+		IncDuplicatedLink()
+
+		Metrics() map[string]int64
+	}
+
+	Request struct {
+		Target *ParsedURL
+		Param  *Param
+		Depth  int32
+	}
+
+	Response struct {
+		URL         *ParsedURL
+		Status      int
+		Body        []byte
+		NextURLs    []*ParsedURL
+		Depth       int32
+		ElapsedTime time.Duration
+		Err         error
+	}
+
+	ParsedURL struct {
+		Hash string
+		Root string
+		URL  *url.URL
+	}
+
+	Param struct {
+		Proxy       string
+		UserAgent   string
+		Referer     string
+		MaxBodySize int64
+		Timeout     time.Duration
+	}
+
+	FilterRule struct {
+		Hostname string
+		Allow    []*regexp.Regexp
+		Disallow []*regexp.Regexp
+	}
+
+	RateLimit struct {
+		Hostname string
+		Rate     string
+	}
+)
+
+func (r *Request) ResolveURL(u string) (*url.URL, error) {
+	if strings.HasPrefix(u, "#") {
+		return nil, fmt.Errorf("url is a fragment")
+	}
+
+	absURL, err := r.Target.URL.Parse(u)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// rate limit
-	wb.limit.take(req.URL)
+	absURL.Fragment = ""
 
-	resp, err := wb.fetcher.Fetch(req)
+	return absURL, nil
+}
+func (u *ParsedURL) String() string {
+	var link = u.URL.String()
+	if len(link) > 64 {
+		return link[:64]
+	}
+	return link
+}
+
+func FindLinks(body []byte) (hrefs []string) {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {
-		return err
+		return hrefs
 	}
 
-	if wb.log != nil {
-		rep := newReport(resp, nil)
-		wb.log.Send(rep)
-	}
-
-	// stream 1st response
-	wb.stream <- resp
-
-	// add to queue
-	for _, link := range resp.NextURLs {
-		u, err := req.AbsURL(link)
-		if err != nil {
-			continue
+	doc.Find("a[href]").Each(func(index int, item *goquery.Selection) {
+		if href, found := item.Attr("href"); found {
+			hrefs = append(hrefs, href)
 		}
-
-		// is allowed domain
-		if !strings.Contains(u.Hostname(), req.BaseDomain) {
-			continue
+	})
+	doc.Find("link[href]").Each(func(index int, item *goquery.Selection) {
+		if href, found := item.Attr("href"); found {
+			hrefs = append(hrefs, href)
 		}
-
-		// add only referer & maxBodySize
-		// rest of params will be added
-		// right before fetch request
-		// to avoid rotating user agent and proxy.
-		p := Param{
-			Referer:     req.URL.String(),
-			MaxBodySize: wb.conf.maxBodySize,
+	})
+	doc.Find("img[src]").Each(func(index int, item *goquery.Selection) {
+		if src, found := item.Attr("src"); found {
+			hrefs = append(hrefs, src)
 		}
-		nreq, err := newRequest(u.String(), 1, p)
-		if err != nil {
-			continue
+	})
+	doc.Find("script[src]").Each(func(index int, item *goquery.Selection) {
+		if src, found := item.Attr("src"); found {
+			hrefs = append(hrefs, src)
 		}
-
-		if err := wb.queue.Enqueue(nreq); err != nil {
-			continue
+	})
+	doc.Find("iframe[src]").Each(func(index int, item *goquery.Selection) {
+		if src, found := item.Attr("src"); found {
+			hrefs = append(hrefs, src)
 		}
-	}
-
-	// start crawl
-	wb.wg.Add(wb.conf.parallel)
-	for i := 0; i < wb.conf.parallel; i++ {
-		go wb.crawl()
-	}
-
-	// wait for all workers to finish
-	wb.wg.Wait()
-	close(wb.stream)
-
-	return nil
+	})
+	return hrefs
 }
 
-// crawl
-func (wb *WBot) crawl() {
-	defer wb.wg.Done()
-	//
-	for wb.queue.Next() {
-		req, err := wb.queue.Dequeue()
-		if err != nil {
-			if wb.log != nil {
-				rep := newReport(Response{}, err)
-				wb.log.Send(rep)
-			}
-			continue
-		}
-
-		// check if max depth reached
-		if req.Depth > wb.conf.maxDepth {
-			if wb.log != nil {
-				rep := newReport(Response{}, fmt.Errorf("max depth reached"))
-				wb.log.Send(rep)
-			}
-			return
-		}
-
-		// if already visited
-		if wb.store.Visited(req.URL.String()) {
-			if wb.log != nil {
-				rep := newReport(Response{}, fmt.Errorf("url recently checked"))
-				wb.log.Send(rep)
-			}
-			continue
-		}
-
-		// check filter
-		if !wb.filter.Allow(req.URL) {
-			if wb.log != nil {
-				rep := newReport(Response{}, fmt.Errorf("filtered url"))
-				wb.log.Send(rep)
-			}
-			continue
-		}
-
-		// rate limit
-		wb.limit.take(req.URL)
-
-		req.Param.UserAgent = wb.conf.userAgents.next()
-		req.Param.Proxy = wb.conf.proxies.next()
-
-		// visit next url
-		resp, err := wb.fetcher.Fetch(req)
-		if err != nil {
-			if wb.log != nil {
-				rep := newReport(resp, err)
-				wb.log.Send(rep)
-			}
-			continue
-		}
-
-		if wb.log != nil {
-			rep := newReport(resp, nil)
-			wb.log.Send(rep)
-		}
-
-		// stream
-		wb.stream <- resp
-
-		// current depth
-		depth := req.Depth
-		// increment depth
-		atomic.AddInt32(&depth, 1)
-
-		// visit next urls
-		for _, link := range resp.NextURLs {
-			u, err := req.AbsURL(link)
-			if err != nil {
-				continue
-			}
-
-			// is allowed domain
-			if !strings.Contains(u.Hostname(), req.BaseDomain) {
-				continue
-			}
-
-			p := Param{
-				Referer:     req.URL.String(),
-				MaxBodySize: wb.conf.maxBodySize,
-			}
-			nreq, err := newRequest(u.String(), depth, p)
-			if err != nil {
-				continue
-			}
-
-			if err := wb.queue.Enqueue(nreq); err != nil {
-				continue
-			}
-		}
+func NewURL(raw string) (*ParsedURL, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
 	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("invalid scheme: %s", u.Scheme)
+	}
+
+	// Extract domain and TLD using publicsuffix-go
+	domain, err := publicsuffix.Domain(u.Hostname())
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract domain: %w", err)
+	}
+
+	// Ensure that the extracted TLD is in our allowed list
+	tld := domain[strings.LastIndex(domain, ".")+1:]
+	if !tlds[tld] {
+		return nil, fmt.Errorf("invalid TLD: %s", tld)
+	}
+
+	hash, err := hashLink(*u)
+	if err != nil {
+		return nil, fmt.Errorf("invalid hash: %s", hash)
+	}
+
+	return &ParsedURL{
+		Hash: hash,
+		Root: domain,
+		URL:  u,
+	}, nil
 }
 
-// SetOptions
-func (wb *WBot) SetOptions(opts ...Option) {
-	for _, opt := range opts {
-		opt(wb)
-	}
-}
+func hashLink(parsedLink url.URL) (string, error) {
+	parsedLink.Scheme = ""
 
-// Stream
-func (wb *WBot) Stream() <-chan Response {
-	return wb.stream
-}
+	parsedLink.Host = strings.TrimPrefix(parsedLink.Host, "www.")
 
-// Close
-func (wb *WBot) Close() {
-	wb.queue.Close()
-	wb.store.Close()
-	if wb.log != nil {
-		wb.log.Close()
+	decodedPath, err := url.PathUnescape(parsedLink.Path)
+	if err != nil {
+		return "", err
 	}
+	parsedLink.Path = decodedPath
+
+	cleanedURL := strings.TrimRight(parsedLink.String(), "/")
+
+	cleanedURL = strings.TrimPrefix(cleanedURL, "//")
+
+	hasher := sha256.New()
+	hasher.Write([]byte(cleanedURL))
+
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }

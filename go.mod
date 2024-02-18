@@ -1,16 +1,24 @@
 module github.com/twiny/wbot
 
-go 1.18
+go 1.22.0
 
 require (
-	github.com/PuerkitoBio/goquery v1.8.0
+	github.com/PuerkitoBio/goquery v1.8.1
+	github.com/rs/zerolog v1.32.0
+	github.com/temoto/robotstxt v1.1.2
+	github.com/twiny/flare v0.1.0
+	github.com/twiny/poxa v0.1.0
 	github.com/twiny/ratelimit v0.0.0-20220509163414-256d3376b0ac
-	go.etcd.io/bbolt v1.3.5
-	golang.org/x/net v0.0.0-20220513224357-95641704303c
+	github.com/weppos/publicsuffix-go v0.30.1
 )
 
 require (
 	github.com/andybalholm/cascadia v1.3.1 // indirect
 	github.com/benbjohnson/clock v1.3.0 // indirect
-	golang.org/x/sys v0.0.0-20211216021012-1d35b9e2eb4e // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.19 // indirect
+	github.com/stretchr/testify v1.8.0 // indirect
+	golang.org/x/net v0.17.0 // indirect
+	golang.org/x/sys v0.13.0 // indirect
+	golang.org/x/text v0.13.0 // indirect
 )
