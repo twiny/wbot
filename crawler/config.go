@@ -9,7 +9,7 @@ import (
 
 const (
 	defaultReferrer    = "https://www.google.com/search"
-	defaultUserAgent   = "WBot/0.1.6 (+https://github.com/twiny/wbot)"
+	defaultUserAgent   = "WBot/v0.2.0 (+https://github.com/twiny/wbot)"
 	defaultTimeout     = 10 * time.Second
 	defaultMaxBodySize = int64(1024 * 1024 * 5) // 5MB
 )
